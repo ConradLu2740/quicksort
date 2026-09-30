@@ -11,9 +11,11 @@
 
 ## 当前状态
 
-- 世代：**Gen 16**
-- EVOLUTION SPEED SCORE：**（读数 0.663，被 pdqsort 侧冷相位压低；绝对耗时：random 10k -45%、100k -11%、1M -9%）**
-- 正确性：debug + release 双 profiles 各 5 个测试套件全绿
+## 当前状态
+
+- 世代：**Gen 17**
+- EVOLUTION SPEED SCORE：**~0.67x（读数随机器相位摆动 0.60~0.67；random 1M 绝对耗时 17.0~17.3ms 稳定）**
+- 正确性：7 个测试全绿（debug + release）
 
 ## 分数历史
 
@@ -34,6 +36,11 @@
 | Gen 12 | ~0.57x（持平） | branchless 分区裸指针化：random -3~5% | 2026-09-30 |
 | Gen 13 | ~0.60x | Ninther pivot：random 100k/1M 绝对耗时 -10~11% | 2026-10-01 |
 | Gen 14 | ~0.70x | 洞式插入排序：few-unique 10k -7%、nearly-sorted 10k -12% | 2026-10-01 |
+| Gen 15 | ~0.74x | CUTOFF 重扫（16→24）：架构变化后最优值上移 | 2026-10-01 |
+| Gen 16 | 绝对耗时大降 | LTO + codegen-units=1 + panic=abort：random 10k -45% | 2026-10-01 |
+| Gen 17 | ~0.67x（持平） | NINTHER_MIN 扫描确认 64；BlockQuicksort 推导存档（第三次止步于尾部） | 2026-10-01 |
+
+## Gen 0：教科书朴素版（基线）
 | Gen 15 | ~0.74x | CUTOFF 重扫（16→24）：架构变化后最优值上移 | 2026-10-01 |
 | Gen 16 | 绝对耗时大降 | LTO + codegen-units=1 + panic=abort：random 10k -45% | 2026-10-01 |
 
@@ -564,6 +571,29 @@
 5. debug + release 双 profiles 测试全绿
 
 **下一步**：random 1M 距 pdqsort 还剩 1.95 倍（17.1 vs 8.8ms）。构建配置已到顶，剩余差距纯算法（块配对分区）。
+
+## Gen 17：NINTHER_MIN 扫描确认 + BlockQuicksort 推导存档（第三次止步于尾部）
+
+**NINTHER_MIN 扫描**（32/64/128/256，random 绝对耗时 ms）：
+
+| NINTHER_MIN | random 10k | random 100k | random 1M |
+|---|---|---|---|
+| 32 | 0.0533 | 1.62 | 17.31 |
+| 64 | 0.0521 | 1.65 | 17.22 |
+| 128 | 0.0548 | 1.62 | 16.90 |
+| 256 | 0.0546 | 1.61 | 16.98 |
+
+差异全在 ±3% 噪声内 → **64 确认**（与盈亏点模型一致）。分数摆动 0.585~0.672 为机器相位。
+
+**BlockQuicksort 推导存档（第三代尝试，存档备将来）**：
+
+已收敛且可证明的主体设计（将来实现从这里开始）：
+1. 三区不变式：[0,L) 全部 < pivot 已定居；[R,len) 全部 > pivot 已定居；(s,t) 未处理
+2. 左扫描从 s 向前，`offs_l[nl] = s; nl += (a[s] >= p) as usize`（cmov 分支less 记录），缓冲满 BLOCK 或到 t 止；右扫描对称（`a[t-1] <= p`）
+3. 每轮配对 `min(nl, nr)` 对 swap：`swap(a[offs_l[i]], a[offs_r[i]])` —— 每次交换同时把一个 ≥ 和一个 ≤ 归位 → random 上 swap 数降为 Lomuto 的 ~1/4
+4. 主循环终止条件：`s >= t && (nl == 0 || nr == 0)`；缓冲 copy_within 出队
+
+**卡点（止步处，已三次）**：主循环退出后，待换残项（≤ BLOCK/侧）+ 中段已分类但未分区的元素构成「中段」，朴素收尾分区按递归树求和 ≈ +n，吃光交换节省。古典解法的「精确 k 增量记账」未能低成本闭合。将来正确路径：实现时跟踪 k = 左类元素计数（每次左扫描发现 < 元素即 k 相关推进，配对交换时同步调整），使残项直接 swap 到 [k, k+残项) 而无需中段扫描。**在完整推导出 k 记账规则前不上主实现。**
 
 ## 死路记录
 

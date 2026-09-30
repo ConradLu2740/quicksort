@@ -189,8 +189,9 @@ fn median_of_3_sort<T: Ord>(arr: &mut [T]) {
 }
 
 /// Ninther 阈值：len >= 此值用九采样中位的的中位，否则中位三。
-/// 盈亏点实测模型：ninther 省 ~13% 比较/交换（m·log2(m)·0.16），成本 ~20 比较，
-/// m=32 附近回本，取 64 留余量。
+/// 盈亏点模型：ninther 省 ~13% 比较/交换（m·log2(m)·0.16），成本 ~20 比较，
+/// m=32 附近回本。Gen 17 实测扫描 32/64/128/256：random 1M 分别
+/// 17.31/17.22/16.90/16.98ms（±3% 噪声内），64 确认（分数摆动为机器相位）。
 const NINTHER_MIN: usize = 64;
 
 /// 为 branchless Lomuto 选 pivot：len < 64 中位三；否则 Tukey ninther
