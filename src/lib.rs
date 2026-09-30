@@ -54,6 +54,66 @@ pub mod inputs;
 ///   O(CUTOFF²) 反超。定 32。
 const CUTOFF: usize = 32;
 
+/// 降序游程检测（Gen 24）：bail 点前 8 个位置是否连续严格递减。
+/// sparse 信号下用它区分「近乎有序」（下降沿稀疏分布，连续 9 个概率 ~0）与
+/// 「大块降序尾」（organ-pipe 家族：前 n/2 递增 + 后 n/2 连续递减，
+/// 9 个下降沿必然连续）—— 后者应走 Lomuto+ninther。
+#[inline(never)]
+fn descending_run_at_bail<T: Ord>(arr: &[T], bail_pos: usize) -> bool {
+    let n = arr.len();
+    let end = bail_pos.min(n - 1);
+    let start = bail_pos.saturating_sub(8);
+    for j in (start + 1)..=end {
+        if !(arr[j] < arr[j - 1]) {
+            return false;
+        }
+    }
+    true
+}
+
+/// 分区路由决策（Gen 24 外描版）：返回 true 走 Hoare，false 走 branchless Lomuto。
+///
+/// 三档下降沿密度信号（quicksort_rec 传入 partial insertion 的 bail 位置）：
+/// - bail_pos <= 10：逆序密度 → Hoare（调用方已先试过整段逆序检测）
+/// - bail_pos >= 48 且 bail 点前无连续降序游程：近乎有序 → Hoare（扫描提前收工）
+/// - bail_pos >= 48 且 bail 点前有连续降序游程：大块降序尾（organ-pipe 家族）
+///   → Lomuto+ninther（3/4 剥层逃过 heapsort，见 descending_run_at_bail）
+/// - 中间密度：branchless Lomuto
+///
+/// #[inline(never)]（Gen 24 布局教训）：整个决策外描，热循环里只剩一次调用
+/// —— 比内联两个阈值比较更小，规避「热函数体积变化 → 布局位移 → 无关 case
+/// 劣化」（Gen 22/24 实测：外描可让 sorted/all-equal 少付 50% 布局税）。
+#[inline(never)]
+fn wants_hoare<T: Ord>(arr: &[T], bail_pos: usize) -> bool {
+    if bail_pos <= DESCENDING_DENSE_BAIL {
+        return true;
+    }
+    if bail_pos >= SPARSE_DESCENT_BAIL {
+        return !descending_run_at_bail(arr, bail_pos);
+    }
+    false
+}
+
+/// 分区策略选择（Gen 9-10 三档信号 + Gen 21 逆序检测 + Gen 24 降序游程精化，
+/// Gen 24 起路由整体外描为 wants_hoare）：
+/// - 逆序密度：先试整段逆序检测，失败走 Hoare（左区有序副产品）
+/// - 近乎有序：Hoare（扫描提前收工）；大块降序尾（organ-pipe）：Lomuto+ninther
+/// - 中间密度：branchless Lomuto（消除扫描分支 mispredict）
+/// 原理：Hoare 吃有结构的数据，Lomuto 吃无结构数据；organ-pipe 是
+/// 「对称采样只能取到 min」的例外，必须换非对称 ninther 才能跳出剥层链。
+fn partition_router<T: Ord>(arr: &mut [T], bail_pos: usize) -> Option<usize> {
+    if bail_pos <= DESCENDING_DENSE_BAIL && try_reverse_sorted(arr) {
+        return None; // 整段逆序，已反转成升序
+    }
+    Some(if wants_hoare(arr, bail_pos) {
+        median_of_3_sort(arr); // Hoare 的哨兵不变量要求三位置有序
+        hoare_partition(arr)
+    } else {
+        lomuto_pivot(arr); // Gen 13：ninther（len>=64）/ 中位三
+        branchless_partition(arr)
+    })
+}
+
 /// partial insertion sort 的容忍乱序数：扫描中「下降沿」超过此值即放弃。
 ///
 /// 为什么必须两段式（先数下降沿、后插入）：
@@ -434,22 +494,10 @@ fn quicksort_rec<T: Ord>(mut arr: &mut [T], mut depth_budget: usize) {
         };
         depth_budget -= 1;
 
-        // 分区策略选择（Gen 9-10，三档下降沿密度信号；Gen 21 增加逆序检测）：
-        // - bail_pos <= 10：逆序密度（前 10 位 9+ 下降沿）→ 先试逆序检测：
-        //   整段非严格递减则一次反转直接完成；否则走 Hoare（左区有序副产品）
-        // - bail_pos >= 48：近乎有序（下降沿极稀疏）→ Hoare：扫描提前收工
-        // - 中间密度（random ~17、few-unique ~22、organ-pipe ~n/2+9）→ branchless Lomuto：
-        //   消除扫描分支 mispredict，random 快 2.4 倍+
-        // 原理：Hoare 吃有结构的数据，Lomuto 吃无结构数据。
-        if bail_pos <= DESCENDING_DENSE_BAIL && try_reverse_sorted(arr) {
+        // 分区路由（Gen 24 起整体外描为 partition_router：三档信号 + 逆序检测
+        // + 降序游程精化 + 分区器选择全在冷函数里，热循环只剩一次调用与 Option 匹配）
+        let Some(k) = partition_router(&mut arr, bail_pos) else {
             return; // 整段逆序，已反转成升序
-        }
-        let k = if bail_pos <= DESCENDING_DENSE_BAIL || bail_pos >= SPARSE_DESCENT_BAIL {
-            median_of_3_sort(&mut arr); // Hoare 的哨兵不变量要求三位置有序
-            hoare_partition(&mut arr)
-        } else {
-            lomuto_pivot(&mut arr); // Gen 13：ninther（len>=64）/ 中位三
-            branchless_partition(&mut arr)
         };
         let left_len = k;
         let right_len = len - k;

@@ -25,8 +25,8 @@
 
 ## 当前状态
 
-- 世代：**Gen 23**
-- EVOLUTION SPEED SCORE：**~0.935x**（三轮中位 0.936；CUTOFF 24→32，微弱占优）
+- 世代：**Gen 24**
+- EVOLUTION SPEED SCORE：**~0.944x**（三轮 0.937/0.944/0.945；organ-pipe 绝对耗时 1k -45%、10k -21%）
 - 正确性：7 个测试全绿
 
 ## 分数历史
@@ -54,11 +54,10 @@
 | Gen 18 | ~0.67x（持平） | 负结果：native 回退；BlockQuicksort 净收益归零，关闭 | 2026-10-01 |
 | Gen 19 | ~0.83x | 零下降沿跳过：all-equal / sorted 追平 pdqsort（0.99x） | 2026-10-01 |
 | Gen 20 | ~0.84x（持平） | 负结果：极端失衡直通粉碎，回退 | 2026-10-01 |
-| Gen 19 | ~0.83x | 零下降沿跳过：all-equal / sorted 追平 pdqsort（0.99x） | 2026-10-01 |
-| Gen 20 | ~0.84x（持平） | 负结果：极端失衡直通粉碎，回退 | 2026-10-01 |
 | Gen 21 | ~0.98x | 逆序检测直达：reverse 追平 pdqsort；冷路径外描修布局回归 | 2026-10-01 |
 | Gen 22 | ~0.93x（持平） | 负结果：two-run 二次方 bug 修复（109 倍）但判分器 -10%（布局税），回退入档 | 2026-10-01 |
 | Gen 23 | ~0.94x | CUTOFF 二扫（24→32）：完成路径降价后 32 微弱占优 | 2026-10-01 |
+| Gen 24 | ~0.944x | 降序游程精化：organ-pipe 改走 Lomuto+ninther 逃过 heapsort；路由整体外描零布局税 | 2026-10-01 |
 
 ## Gen 0：教科书朴素版（基线）
 
@@ -749,6 +748,32 @@ assert!(v.windows(2).all(|w| w[0] <= w[1]));
 | 48 | 0.908 / 0.910 / 0.908 → 0.908 |
 
 **结论**：32 较 24 +1%（噪声内，但三轮方向一致）；48 起叶级 O(CUTOFF²) 成本反超（-3%）。常数改动零风险，取 32。扫描表已写入 `CUTOFF` 注释（第三次参数史：Gen 7 全平定 16 → Gen 15 上移定 24 → Gen 23 再上移定 32，与「完成路径逐代变便宜」的机制叙事一致）。
+
+## Gen 24：降序游程精化（organ-pipe 逃过 heapsort）+ 路由整体外描
+
+**改动**：① sparse 档（bail_pos ≥ 48）新增「bail 点前 8 位连续严格递减」检测——真则判定为「大块降序尾」（organ-pipe 家族签名：前 n/2 递增 + 后 n/2 连续递减，9 个下降沿必然连续；nearly-sorted 的 9 个下降沿稀疏分布、连续概率 ~0），改走 **Lomuto + ninther**；② 路由决策整体外描为 `partition_router`/`wants_hoare`/`descending_run_at_bail`（均 `#[inline(never)]`）。
+
+**动机**：organ-pipe 在 Hoare 上 pivot 恒为 min（三采样 (1, max, 1) → 中位 = 1）、剥 1 层 → heapsort（0.11ms ≈ 纯 heapsort 成本）；Lomuto 的 ninther 九采样对 U 形分布取到 ~n/8 分位值 → 3/4 剥层、~32 层深度 < 42 深度预算 → **逃过 fallback**。
+
+**基准数据（absolute，ms）**：
+
+| case | Gen 23 | Gen 24 |
+|---|---|---|
+| organ-pipe 100 | ~0.0003 | ~0.0003（0.79x） |
+| organ-pipe 1k | 0.0094 | 0.0048~0.0056（**-45%**，0.72~0.82x） |
+| organ-pipe 10k | 0.1099 | 0.0789~0.0868（**-21%**，0.63~0.69x） |
+| sorted 10k | 0.0020 | 0.0020（0.99x，无伤） |
+| nearly-sorted 10k | 0.0339 | 0.0339（1.64x，无误伤） |
+| random 1M | 17.25 | 17.20（无伤） |
+
+**EVOLUTION SPEED SCORE：0.936 → 0.944（三轮 0.937/0.944/0.945）**
+
+**关键插曲（布局税的第二次战胜）**：初版路由内联时 organ-pipe 收益达成，但 **sorted/all-equal +50~100%**（0.0020→0.0030/0.0040）——两 case 零下降沿提前返回、算法上零变化，纯布局税（Gen 22 同机制）。把整个路由外描后（热循环从「两个阈值比较内联」变成「一次调用」——**比原来更小**），sorted/all-equal 恢复 0.0020/0.99x，organ-pipe 收益保留。**外描不仅能止损，还能比原版更小**。
+
+**结论**：
+1. organ-pipe 1k -45%、10k -21%（仍不及 pdqsort 的 0.63x，但脱离 heapsort 区）；信号零误判（nearly-sorted、random、few-unique 全部无伤，random 的 bail ~17 根本进不了 sparse 档）
+2. 方法论语码化 #2：路由/决策类新增逻辑优先整体外描，让热循环体积不增反降
+3. 剩余缺口：organ-pipe 10k（0.63x）、random 100k/1M（~0.5x）
 
 ## 死路记录
 
