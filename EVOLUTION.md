@@ -10,8 +10,8 @@
 
 ## 当前状态
 
-- 世代：**Gen 32**
-- EVOLUTION SPEED SCORE：**本代为门禁加固代，无分数结论（热相位 gauge 10.33）**
+- 世代：**Gen 33**
+- EVOLUTION SPEED SCORE：**无分数结论（热相位 gauge ~10.40；lint 清理 canary +1% 噪声内）**
 - 正确性：双 profile 全绿——debug 10 套件 / release 11 套件（含 200k mega stress）
 
 ## 分数历史
@@ -51,6 +51,7 @@
 | Gen 30 | ~1.02x | 路由参数面收官（UNBALANCED_DIV/SPARSE/LIMIT 全确认）+ 差分门禁扩容至 6 测试 | 2026-10-01 |
 | Gen 31 | —（判分器代） | 相位 gauge 后置落地；harness 污染实验：前置负载 +17% 污染被测 case（金丝雀纪律沉淀） | 2026-10-01 |
 | Gen 32 | —（门禁代） | 双 profile 验证制度化 + release 百万级 stress（200k×5 模式，cfg 反选零成本） | 2026-10-01 |
+| Gen 33 | —（hygiene 代） | clippy 两处修正（int_plus_one、nonminimal_bool），canary +1% 噪声内，双门禁绿 | 2026-10-01 |
 
 ## 分数历史
 
@@ -964,8 +965,20 @@ assert!(v.windows(2).all(|w| w[0] <= w[1]));
 **验证结果**：debug 6 差分（mega 跳过）/ release 7 差分（含 mega，0.02s）全绿；排序主体 unsafe 路径在优化下干净。
 
 **EVOLUTION SPEED SCORE：本代为门禁加固代，无分数结论（会话热相位 gauge ~10.33，与冷相位不可比）**
+## Gen 33：lint 清理（clippy 两处修正，金丝雀纪律下的小变动）
 
-## 死路记录
+**背景**：会话持续热相位（gauge ~10.4），无跨相位分数结论空间，做 hygiene 资产。
+
+**修正（语义等价、双门禁绿）**：
+1. `break_patterns_sides`：`arr.len() - gt - 1 >= 8` → `arr.len() - gt > 8`（clippy::int_plus_one）
+2. `descending_run_at_bail`：`!(arr[j] < arr[j-1])` → `arr[j] >= arr[j-1]`（clippy::nonminimal_bool）
+
+**金丝雀验证**（Gen 31 纪律——任何 src 变动都过绝对耗时探针）：random 1M 15.73~15.94 → 15.93~16.05ms（+1% 内，热相位抖动）；debug/release 双 profile 5 套件全绿。
+
+**保留项**：5 个 `&mut arr` 提示为非末次使用的显式重借用（clippy 建议的去掉 borrow 写法会编译错误，正确写法 `&mut *arr` 属纯抛光，不再增加 src 变动面）。
+
+**EVOLUTION SPEED SCORE：无分数结论（热相位 gauge ~10.40，canary +1% 噪声内）**
+
 ## 死路记录
 
 | 方案 | 结论 | 原因 |

@@ -64,7 +64,7 @@ fn descending_run_at_bail<T: Ord>(arr: &[T], bail_pos: usize) -> bool {
     let end = bail_pos.min(n - 1);
     let start = bail_pos.saturating_sub(8);
     for j in (start + 1)..=end {
-        if !(arr[j] < arr[j - 1]) {
+        if arr[j] >= arr[j - 1] {
             return false;
         }
     }
@@ -507,7 +507,7 @@ fn break_patterns_sides<T>(arr: &mut [T], lt: usize, gt: usize) {
     if lt >= 8 {
         break_patterns(&mut arr[..lt]);
     }
-    if arr.len() - gt - 1 >= 8 {
+    if arr.len() - gt > 8 {
         break_patterns(&mut arr[gt + 1..]);
     }
 }
