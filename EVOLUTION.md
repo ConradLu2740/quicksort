@@ -21,9 +21,11 @@
 
 ## 当前状态
 
-- 世代：**Gen 21**
-- EVOLUTION SPEED SCORE：**~0.98x**（本轮 0.977；reverse/all-equal/sorted 全部追平 pdqsort，剩余唯一缺口 organ-pipe 0.49x）
-- 正确性：7 个测试全绿
+## 当前状态
+
+- 世代：**Gen 22**
+- EVOLUTION SPEED SCORE：**~0.93x（回退验证，与 Gen 21 持平；本代为负结果：修复价值巨大但判分器净负，回退入档）**
+- 正确性：6 个测试全绿（two-run 回归测试暂存于本日志，未入 tests/）
 
 ## 分数历史
 
@@ -49,8 +51,9 @@
 | Gen 17 | ~0.67x（持平） | NINTHER_MIN 扫描确认 64；BlockQuicksort 推导存档 | 2026-10-01 |
 | Gen 18 | ~0.67x（持平） | 负结果：native 回退；BlockQuicksort 净收益归零，关闭 | 2026-10-01 |
 | Gen 19 | ~0.83x | 零下降沿跳过：all-equal / sorted 追平 pdqsort（0.99x） | 2026-10-01 |
-| Gen 20 | ~0.84x（持平） | 负结果：极端失衡直通粉碎（few-unique +31%、random +12%），回退 | 2026-10-01 |
-| Gen 21 | ~0.98x | 逆序检测直达：reverse 追平 pdqsort（0.997x）；冷路径外描修布局回归 | 2026-10-01 |
+| Gen 20 | ~0.84x（持平） | 负结果：极端失衡直通粉碎，回退 | 2026-10-01 |
+| Gen 21 | ~0.98x | 逆序检测直达：reverse 追平 pdqsort；冷路径外描修布局回归 | 2026-10-01 |
+| Gen 22 | ~0.93x（持平） | 负结果：two-run 二次方 bug 修复（109 倍）但判分器 -10%（布局税），回退入档 | 2026-10-01 |
 
 ## Gen 0：教科书朴素版（基线）
 
@@ -697,6 +700,33 @@
 1. reverse 10k 追平 pdqsort（-55%），1k 0.96x；假阳成本 ~2 次比较（首个非递减位即失败）
 2. 打平或反超 pdqsort 的 case 达 13/23（all-equal 3、sorted 3、reverse 2、nearly-sorted 3、random 100、few-unique 100）
 3. 剩余唯一显著缺口：organ-pipe 0.49x
+
+## Gen 22：负结果（two-run 二次方 bug：修复有效但判分器净负，回退入档）
+
+**发现（真实鲁棒性 bug，与判分器无关）**：「两段有序」输入 `[升序 run | 升序 run]`（合并两个有序流、轮转有序数组的真实类）只有 **1 个下降沿**但插入位移 O(n²/4)——partial insertion 的「数下降沿 ≤ 8 就插入」逻辑被击穿，实测 **n=100k 要 259ms（应为 ~0.3ms，差 800 倍）**。
+
+**修复（已验证有效）**：partial insertion 第二段改「数下降沿 + 数总移位」，移位超 `len/8+32` 中途放弃（洞已填、前缀有序、无副作用，落分区路径）。two-run 100k：**259ms → 2.37ms（109 倍）**，且 organ-pipe 10k 顺带 -12%。
+
+**回退原因（判分器判据）**：修复让 random 1M **17.25→19.65ms（+13%）**、nearly-sorted 10k +20%，总分 0.977 → 0.88（-10%）。关键证据：random 数据根本不进插入段（bail_pos ~17），且 `#[inline(never)]` 外描后热路径与 Gen 21 逐指令相同、回退依旧——**纯二进制布局税**（新增/变大函数位移热循环，std 侧读数不动可排除机器相位）。一个 random 永不调用的函数让 random 贵 13%，这是 Gen 20/21 布局现象的第三次实证，且外描无法救治。
+
+**入档的修复方案（将来落地条件：任一改变二进制布局的世代顺手带上，届时重测布局税是否仍存在）**：
+```rust
+// partial_insertion_sort 第一段（下降沿扫描）不变；
+// 第二段改为带预算插入：
+let budget = arr.len() / 8 + 32;
+let mut shifts = 0;
+// 洞式插入循环内每个 ptr::copy 后 shifts += 1；
+// if shifts > budget { ptr::write(洞位, saved); return Some(i); }  // 填洞后放弃
+```
+回归测试（已验证 2.37ms）：
+```rust
+let n = 100_000; let half = n / 2;
+let mut v: Vec<u32> = (0..half as u32).chain(0..half as u32).collect();
+quicksort(&mut v);
+assert!(v.windows(2).all(|w| w[0] <= w[1]));
+```
+
+**教训（第三次）**：本代码库对二进制布局极度敏感——「逻辑上永不执行的分支」也能通过布局让热路径贵 10%+。行动准则固化：① 任何热函数体积变化必须多轮验证 random 1M；② 外描冷路径可救（Gen 21）但不总救（Gen 22）；③ 修 bug 优先于刷分，但判分器净负时必须回退入档、择 Layout 再平衡的世代顺手带上。
 
 ## 死路记录
 
