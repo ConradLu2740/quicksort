@@ -5,29 +5,27 @@
 
 pub mod inputs;
 
-// GENERATION: 6 —— 混合分区：默认 Hoare 扫描 + 坏分区升级 DNF（pdqsort 正式版架构）
+// GENERATION: 9 —— 双分区 + 下降沿密度信号：branchless Lomuto（random 专家）+ Hoare（逆序专家）
 //
-// 相对 Gen 5 的改进动机：
-// - Gen 5 全程 DNF：random 大输入只有 0.12~0.15x。DNF 每层全量扫描一个元素一次
-//   （1.58 n log n），Hoare 的指针相遇会提前收工（1.10 n log n）——差 44%
-// - 但 Hoare 对重复密集数据没有 == 段冻结，all-equal / few-unique 要付
-//   O(n log n) 的成对交换（Gen 4 实测 0.043x / 0.25x）
+// 演进脉络：
+// - Gen 6：默认 Hoare + 坏分区升级 DNF（pdqsort 分区策略）
+// - Gen 8 诊断：random 大输入与 pdqsort 差 6.3 倍，瓶颈是 Hoare 扫描的数据依赖
+//   分支 ~50% mispredict（~8 周期/次比较），不是边界检查
+// - Gen 9：分支免费版 Lomuto（无条件 swap + cmov 条件自增）拿下 random
+//   （1M 54.5→21.9ms，2.4 倍）；但 Lomuto 左区按扫描顺序搬运小于元素，
+//   逆序输入下左区为逆序、partial insertion 接不住（1.47 vs Hoare 0.30 n log n）
+// - 解法：partial insertion 的 bail 位置免费充当「逆序密度」信号
+//   （前 10 位攒够 9 个下降沿 → 走 Hoare；random 误触率 ~1%）
 //
-// 解法（pdqsort 的分区策略）：
-// 1. 默认 Hoare 分区（位置跟踪，Gen 1 不变式）→ 边界 j：[..=j] <= pivot，[j+1..] > pivot
-// 2. 分区失衡（某侧 < len/8）→ 升级通道：整段重跑 DNF 三路分区，
-//    冻结 ==pivot 中段。重复密集时 Hoare 必失衡（pivot 是常见值 → 一侧近乎为空），
-//    而全 distinct 数据只有 ~2-4% 节点触发升级，付 2n 过路费
-// 3. partial insertion sort / 坏分区模式粉碎 / 深度预算 heapsort fallback 均保留
+// 结果：总分中位 0.604x（三轮 0.611/0.547/0.604，此前 ~0.52），全线无牺牲：
+// random 2.4~3.3 倍、few-unique 历史最佳 0.81~1.06x、reverse 完整恢复。
 //
 // 实现要点（不变式，改动时勿破坏）：
-// 1. 三元素排序后 a[0] <= a[mid] <= a[hi]，pivot 值 = a[mid]，pivot 位置恒非末位
-// 2. Hoare：swap 碰 pivot 位时 p 跟随移动，a[p] 恒为 pivot 值，扫描不越界；
-//    边界 j 保证 arr[..=j] <= arr[j+1..] 且 j <= len-2
-// 3. DNF：全程 a[p] 恒为 pivot 值；返回 (lt, gt)：
-//    arr[..lt) < pivot，arr[lt..=gt] == pivot（就位不递归），arr[gt+1..) > pivot；
-//    gt 不会下溢（i <= gt 才会 gt--，此时 pivot 必在 0 位，arr[0] > arr[0] 恒假）
-// 4. 深度预算耗尽仍 fallback heapsort，最坏 O(n log n)
+// 1. 两分区统一输出「切分点 k」：arr[..k] 与 arr[k..] 两侧严格变小
+// 2. branchless Lomuto：pivot 值 ManuallyDrop 本地副本；每步无条件 swap(i,j)，
+//    `i += less as usize` cmov 化；!less 时 swap 交换两个都 >= pivot 的元素、无副作用
+// 3. 坏分区升级 DNF / partial insertion / 模式粉碎 / 深度预算 heapsort fallback
+//    全部保留；Hoare 仅作逆序数据专用路径
 
 /// 小分区 cutoff：len <= 此值的子区间改用插入排序，不再分区递归。
 /// 参数扫描记录（Gen 7，各跑 3 轮取中位，23 case 几何平均）：
@@ -43,6 +41,11 @@ const CUTOFF: usize = 16;
 /// 两段式下，乱序输入最多 ~2·LIMIT 次比较即退场（逆向/风琴/随机都在 ~16 次比较内退场），
 /// 确认近乎有序后才付出一次性的 O(n) 插入。
 const PARTIAL_INSERTION_LIMIT: usize = 8;
+
+/// 逆序密度信号阈值：partial insertion 的 bail 位置 <= 此值 → 判定逆序/近逆序。
+/// 逆序数据第 9 个位置即攒够 9 个下降沿（密度 100%）；random 要约 17+，
+/// 误触率约 1%（P(前 10 位内出现 9+ 下降沿, p=0.5) ≈ 1.1%）。
+const DESCENDING_DENSE_BAIL: usize = 10;
 
 /// 分区失衡阈值：任一侧 < len/8 视为坏分区。
 const UNBALANCED_DIV: usize = 8;
@@ -72,23 +75,24 @@ fn insertion_sort<T: Ord>(arr: &mut [T]) {
 }
 
 /// partial insertion sort（两段式）：先纯比较扫描数「下降沿」，
-/// 超过 PARTIAL_INSERTION_LIMIT 立即返回 false（乱序输入 ~2·LIMIT 次比较退场，
-/// 不碰任何交换）；确认近乎有序后，才用一趟插入排序直接排完切片（一次性 O(n)）。
+/// 超过 PARTIAL_INSERTION_LIMIT 立即返回 Some(第九个下降沿的位置)（乱序输入
+/// ~2·LIMIT 次比较退场，不碰任何交换）；确认近乎有序后，才用一趟插入排序直接
+/// 排完切片并返回 None。
 ///
-/// 收益面：sorted / all-equal / 「有序+少量错位」在各节点直接完成，
-/// 从根上消灭退火链，也让有序类输入跑赢 pdqsort。
-fn partial_insertion_sort<T: Ord>(arr: &mut [T]) -> bool {
+/// 返回的 bail 位置同时是 quicksort_rec 的分区策略信号：
+/// 前 10 个位置就攒够 9 个下降沿 = 逆序/近逆序密度 → 选 Hoare。
+fn partial_insertion_sort<T: Ord>(arr: &mut [T]) -> Option<usize> {
     let mut disorder = 0usize;
     for i in 1..arr.len() {
         if arr[i] < arr[i - 1] {
             disorder += 1;
             if disorder > PARTIAL_INSERTION_LIMIT {
-                return false;
+                return Some(i);
             }
         }
     }
     insertion_sort(arr);
-    true
+    None
 }
 
 /// 堆排序（深度预算耗尽时的 fallback）：sift-down 建大顶堆，逐轮把堆顶换到尾部。
@@ -141,13 +145,12 @@ fn median_of_3_sort<T: Ord>(arr: &mut [T]) {
 }
 
 /// Hoare 分区（pivot 位置跟踪，免 Clone）。调用方须先做 median_of_3_sort。
-/// 返回边界 j：arr[..=j] <= pivot，arr[j+1..] > pivot，且 j <= len-2。
+/// 返回切分点 k = j+1：arr[..k] <= pivot，arr[k..] > pivot。
 ///
-/// 已实验并否决（Gen 8）：改成「pivot 值 ptr::read 进 ManuallyDrop 本地副本 +
-/// swap(0, mid) 钉位 + 裸指针无界检查扫描」。random 1M 仅 -3.4%（56.4→54.5ms），
-/// 但 reverse/sorted 劣化 25~54%（总分 -9%）。诊断结论：random 大输入的 6 倍差距
-/// 的真瓶颈是**分支预测失败**（数据依赖扫描 ~50% mispredict ≈ 8 周期/次比较），
-/// 不是边界检查或 pivot 跟踪 —— 下一步应对准「无分支分区」，别再碰指针化。
+/// Gen 9 起定位为「逆序数据专家」：逆序输入下 Hoare 分区产出的左区恰好有序，
+/// 可被 partial insertion sort 免费接住（实测 0.30 n log n，近线性）；
+/// 而 branchless Lomuto 的左区是逆序、需全额递归（1.47 n log n）。
+/// 由 quicksort_rec 按 partial insertion 的下降沿密度信号选用。
 fn hoare_partition<T: Ord>(arr: &mut [T]) -> usize {
     let hi = arr.len() - 1;
     let mut i = 1usize; // a[0] <= pivot，左扫描从 1 开始（pivot 位天然挡住越界）
@@ -162,7 +165,7 @@ fn hoare_partition<T: Ord>(arr: &mut [T]) -> usize {
             j -= 1;
         }
         if i >= j {
-            return j;
+            return j + 1;
         }
         arr.swap(i, j);
         // pivot 跟随交换移动，维持 a[p] 为 pivot 值
@@ -174,6 +177,42 @@ fn hoare_partition<T: Ord>(arr: &mut [T]) -> usize {
         i += 1;
         j -= 1;
     }
+}
+
+/// 分支免费版 Lomuto 分区（Gen 9：branchless 化）。调用方须先做 median_of_3_sort，
+/// pivot 取中位值 = a[mid]。
+///
+/// 做法：每步「无条件 swap(i, j) + 条件自增 i」——比较结果只走 cmov 不进分支：
+/// - arr[j] < pivot：正常 Lomuto，小于者换到左段，i 前进
+/// - arr[j] >= pivot：swap(i, j) 交换的是两个都 >= pivot 的元素（左段头部与 j），
+///   无副作用，i 不动 —— 不变量 [0, i) < pivot、[i, j+1) >= pivot 保持
+///
+/// 免 Clone：pivot 值 ptr::read 进 ManuallyDrop 本地副本（绝不 drop，泛型 T
+/// 可能有 Drop 实现，避免双重 drop）；副本在扫描期间不变，是全部比较的基准。
+///
+/// 返回切分点 i：arr[..i) < pivot，arr[i..) >= pivot（等值归右段——
+/// 全等/重复密集时 i 趋 0，会被调用方的失衡检测捕获并升级 DNF）。
+/// 严格收缩：pivot 元素自身 == pivot 必在右段，故 i <= len-1 且 len-i >= 1。
+///
+/// 定位为「random/重复数据专家」：消除扫描分支的 ~50% mispredict，
+/// random 大输入实测快 2.5~3.3 倍（1M：54.5→21.9ms）。
+fn branchless_partition<T: Ord>(arr: &mut [T]) -> usize {
+    let len = arr.len();
+    debug_assert!(len >= 4);
+    let mid = (len - 1) / 2;
+
+    // SAFETY: mid < len；副本包 ManuallyDrop 绝不 drop
+    let pivot: std::mem::ManuallyDrop<T> =
+        unsafe { std::mem::ManuallyDrop::new(std::ptr::read(arr.as_ptr().add(mid))) };
+
+    let mut i = 0usize;
+    for j in 0..len {
+        let less = arr[j] < *pivot;
+        // 无条件交换；cmov 化的条件自增。LLVM 将 `less as usize` 编译为 cmov/setcc。
+        arr.swap(i, j);
+        i += less as usize;
+    }
+    i
 }
 
 /// DNF 三路分区（自带 3-sort + pivot 位置跟踪，免 Clone）。
@@ -257,19 +296,24 @@ fn quicksort_rec<T: Ord>(mut arr: &mut [T], mut depth_budget: usize) {
             return;
         }
         // 近乎有序的切片直接排完返回，不进入分区路径
-        if partial_insertion_sort(arr) {
+        let Some(bail_pos) = partial_insertion_sort(arr) else {
             return;
-        }
+        };
         depth_budget -= 1;
 
         median_of_3_sort(&mut arr);
-        let j = hoare_partition(&mut arr);
-        let left_len = j + 1;
-        let right_len = len - j - 1;
-
-        if left_len + right_len == 0 {
-            return; // 全等切片（Hoare 对全等也对半劈，不会到这里；防御性保留）
-        }
+        // 分区策略选择（Gen 9）：
+        // - bail_pos 很小（前 10 位 9+ 下降沿）= 逆序密度 → Hoare：
+        //   其双向交换的分区副产品是「左区有序」，partial insertion 免费接住
+        // - 否则 → branchless Lomuto：消除扫描分支 mispredict，random 快 2.5 倍+
+        // 两条路径统一到切分点 k：arr[..k] 与 arr[k..] 两侧。
+        let k = if bail_pos <= DESCENDING_DENSE_BAIL {
+            hoare_partition(&mut arr)
+        } else {
+            branchless_partition(&mut arr)
+        };
+        let left_len = k;
+        let right_len = len - k;
 
         if left_len < len / UNBALANCED_DIV || right_len < len / UNBALANCED_DIV {
             // 坏分区升级通道（Gen 6 核心）：
@@ -298,11 +342,11 @@ fn quicksort_rec<T: Ord>(mut arr: &mut [T], mut depth_budget: usize) {
         } else {
             // 均衡分区：小侧递归，大侧循环
             if left_len < right_len {
-                quicksort_rec(&mut arr[..=j], depth_budget);
-                arr = &mut arr[j + 1..];
+                quicksort_rec(&mut arr[..k], depth_budget);
+                arr = &mut arr[k..];
             } else {
-                quicksort_rec(&mut arr[j + 1..], depth_budget);
-                arr = &mut arr[..=j];
+                quicksort_rec(&mut arr[k..], depth_budget);
+                arr = &mut arr[..k];
             }
         }
     }

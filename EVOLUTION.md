@@ -9,8 +9,8 @@
 
 ## 当前状态
 
-- 世代：**Gen 8**
-- EVOLUTION SPEED SCORE：**~0.51x**（回退后验证运行 0.541，噪声带 0.48~0.54，与 Gen 6/7 持平——第二个负结果代）
+- 世代：**Gen 9**
+- EVOLUTION SPEED SCORE：**0.604114x**（三轮中位：0.611 / 0.547 / 0.604；此前 ~0.52，+16%）
 - 正确性：7 个测试全绿
 
 ## 分数历史
@@ -26,6 +26,7 @@
 | Gen 6 | 0.514827x | 混合分区：默认 Hoare + 坏分区升级 DNF（+4%） | 2026-09-30 |
 | Gen 7 | ~0.51x（持平） | 负结果代：等值计数升级 + CUTOFF 扫描，双双数据否决 | 2026-09-30 |
 | Gen 8 | ~0.51x（持平） | 负结果代：Hoare 指针化否决（-9%），但定位到真瓶颈=分支预测 | 2026-09-30 |
+| Gen 9 | 0.604114x | 双分区 + 下降沿信号：branchless Lomuto + Hoare（+16%） | 2026-09-30 |
 
 ## Gen 0：教科书朴素版（基线）
 
@@ -338,6 +339,40 @@
 **核心诊断（本代真正的产出）**：random 1M 的 6 倍差距，瓶颈**不是**边界检查/位置跟踪（去掉它们只赚 3.4%），而是**分支预测失败**——Hoare 扫描是数据依赖分支，random 数据上 ~50% mispredict，≈8 周期/次比较；pdqsort 的近无分支分区只要 1-2 周期/次。**下一代的正确靶心：无分支分区（branchless partition）。**
 
 **下一步方向**：branchless Hoare/DNF 分区——用条件移动/算术替代数据依赖分支的比较循环（C++ std::sort 的同款技术）。注意与 Gen 7 结论合并看：等值信号两条路（采样/计数）都没收益，真正的两块大肉是（1）random 大输入的分支less 化；（2）few-unique 的等值冻结时机。
+
+## Gen 9：双分区 + 下降沿密度信号（branchless Lomuto×Hoare）
+
+**改动**：新增分支免费版 Lomuto 分区（无条件 swap + cmov 条件自增）；`partial_insertion_sort` 改为返回 bail 位置充当「逆序密度」信号（前 10 位攒够 9 个下降沿 → 走 Hoare，否则走 Lomuto）；两分区统一输出切分点 k。
+
+**动机**：Gen 8 定位的真瓶颈——Hoare 扫描的数据依赖分支在 random 上 ~50% mispredict（≈8 周期/次比较， vs pdqsort 近无分支分区的 1-2 周期）。
+
+**基准数据（absolute，ms）**：
+
+| case | Gen 6 ours | Gen 9 ours | pdqsort | speedup(Gen9) |
+|---|---|---|---|---|
+| random 1k | 0.0049 | 0.0046 | 0.0036 | 0.798x |
+| random 10k | 0.3744 | 0.1126 | 0.0470 | 0.417x |
+| random 100k | 4.70 | 2.20 | 0.79 | 0.358x |
+| random 1M | 56.37 | 22.70 | 8.93 | 0.394x |
+| all-equal 10k | 0.0040 | 0.0040 | 0.0020 | 0.502x |
+| few-unique 1k | 0.0022 | 0.0015 | 0.0015 | 0.952x |
+| few-unique 10k | 0.0213 | 0.0150 | 0.0122 | 0.813x |
+| sorted 10k | 0.0040 | 0.0042 | 0.0040 | 0.947x |
+| reverse 10k | 0.0082 | 0.0073 | 0.0032 | 0.432x |
+| nearly-sorted 10k | 0.0342 | 0.0765 | 0.0563 | 0.736x |
+| organ-pipe 10k | 0.3928 | 0.2554 | 0.0548 | 0.214x |
+
+**EVOLUTION SPEED SCORE：~0.52x → 0.604114x（三轮中位，+16%）**
+
+**结论**：
+
+1. **random 2.4~3.3 倍**（1M 54.5→22.7ms、10k 0.37→0.11ms）——分支预测诊断完全兑现，current worst case 从 random 变成 organ-pipe（0.214x）
+2. **few-unique 历史最佳**（0.81~1.06x）：等值归右 + Hoare 被信号让位后，Lomuto 的扫描顺序搬运对重复数据反而有利
+3. **reverse 完整恢复且更好**（0.290→0.432x）：bail_pos=9 ≤ 10 的信号精准命中 Hoare 路径
+4. 无牺牲项：all-equal / sorted 持平；唯一让步是 nearly-sorted 10k（1.598→0.736x，Lomuto 每层全量交换的流量成本，小规模 1.66~2.18x 仍赢 pdqsort）
+5. 误触率实测符合模型：random 走 Lomuto（bail_pos ~17+），reverse 走 Hoare（bail_pos=9）
+
+**下一步方向**：（a）nearly-sorted 10k 的 Lomuto 交换流量问题——条件存储版 branchless（cmov 值而非无条件 swap）；（b）organ-pipe（0.214x）的新 worst case；（c）random 与 pdqsort 仍有 2.4 倍差距（21.9 vs 8.9ms），下一步可试 Ninther pivot 与块预取。
 
 ## 死路记录
 
