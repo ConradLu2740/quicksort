@@ -9,9 +9,9 @@
 
 ## 当前状态
 
-- 世代：**Gen 4**
-- EVOLUTION SPEED SCORE：**0.321654x**（三轮中位：0.3200 / 0.3217 / 0.3339；与 Gen 3 统计持平，属稳健代）
-- 正确性：5 个测试全绿（3 差分 + 2 lib 单测）
+- 世代：**Gen 5**
+- EVOLUTION SPEED SCORE：**0.494956x**
+- 正确性：6 个测试全绿（3 差分 + 2 lib 单测 + 1 比较次数回归测试）
 
 ## 分数历史
 
@@ -21,7 +21,8 @@
 | Gen 1 | 0.137721x | Hoare 分区 + 中间 pivot（6.2 倍提升） | 2026-09-30 |
 | Gen 2 | 0.207548x | median-of-three pivot（+51%） | 2026-09-30 |
 | Gen 3 | 0.327240x | 插入排序 cutoff=16（+58%） | 2026-09-30 |
-| Gen 4 | 0.321654x | introsort 保险：深限 + heapsort fallback（性能持平，换来最坏 O(n log n) 硬保证 + 栈深 ≤ log₂n） | 2026-09-30 |
+| Gen 4 | 0.321654x | introsort 保险（持平，换最坏 O(n log n) 硬保证） | 2026-09-30 |
+| Gen 5 | 0.494956x | pdqsort 三件套：DNF 三路分区 + 两段式 partial insertion + 模式粉碎（+54%） | 2026-09-30 |
 
 ## Gen 0：教科书朴素版（基线）
 
@@ -230,6 +231,49 @@
 
 **下一步方向**：Gen 5 荷兰旗三路分区（all-equal / few-unique 的专用杀器：全等即识别、直接返回）。
 
+## Gen 5：pdqsort 三件套（DNF 三路分区 + 两段式 partial insertion sort + 坏分区模式粉碎）
+
+**改动**：Hoare → DNF 三路分区（泛型免 Clone：pivot 位置跟踪扩展到 DNF）；分区前两段式 partial insertion sort；坏分区后模式粉碎。
+
+**动机**：all-equal（0.043x）和 few-unique（0.25x）是当时最差的两个 case，都是 Hoare 对重复元素做无用功。
+
+**这一代的翻车与修复（完整记录，教训比结果重要）**：
+
+1. **DNF 单独上线 → 总分 -37%（0.322x → 0.204x）**。sorted 输入墙钟慢了 21 倍、耗时按 ~n^1.4 增长。用计数比较器的诊断测试定位：sorted 10k 比较次数 848,905 次（6.38 n log n，Gen 4 只要 111,022 / 0.84）。
+2. **根因**：DNF 的 `>` 清扫在右区留下「有序 + 队尾一个错位元素」→ 下层三元素排序把**次小值**送进 pivot 位 → pivot 贴边 → 右区又是「有序+错位」——自相似退火链，每层只剥 1 个元素（TRACE 实测：len=255 时 lt=1, gt=1, left=1, right=253）。
+3. **只加模式粉碎 → 6.38 降到 4.44 n log n，不够**：2 对交换只打乱 4/253 个元素，采样位仍被错位元素劫持。
+4. **加 blind partial insertion → random/nearly-sorted/organ-pipe 三个 regime 全部受伤**（random 1M 0.171→0.131、nearly-sorted 1k 2.26→0.26、organ-pipe 0.50→0.15）：单段边扫边插时，nearly-sorted 第一个错位元素的插入就能跑几千步，成本已经 O(n) 才数到第二个下降沿；organ-pipe 更是 1 个下降沿配 O(n²) 插入路程。
+5. **修正为两段式 → 问题全消**：先纯比较数下降沿、超 8 立即退场（乱序输入 ~16 次比较退场，不碰交换），确认近乎有序后才一趟插入。退火链被「有序+少量错位」节点的直接完成从根上剪断。
+
+**基准数据（定稿版）**：
+
+| distribution | n | ours(ms) | pdqsort(ms) | speedup | Gen4 speedup |
+|---|---|---|---|---|---|
+| random | 100 | 0.0003 | 0.0003 | 0.846x | 1.168x |
+| random | 1k | 0.0064 | 0.0036 | 0.571x | 1.135x |
+| random | 10k | 0.4017 | 0.0469 | 0.117x | 0.148x |
+| random | 100k | 5.2839 | 0.7852 | 0.149x | 0.180x |
+| random | 1M | 63.0825 | 8.8200 | 0.140x | 0.171x |
+| all-equal | 10k | 0.0037 | 0.0020 | 0.547x | 0.043x |
+| few-unique | 10k | 0.0131 | 0.0109 | 0.836x | 0.245x |
+| sorted | 10k | 0.0040 | 0.0030 | 0.748x | 0.071x |
+| reverse | 10k | 0.0098 | 0.0023 | 0.238x | 0.075x |
+| nearly-sorted | 10k | 0.0830 | 0.0562 | 0.677x | 1.811x |
+| organ-pipe | 10k | 0.2987 | 0.0550 | 0.184x | 0.501x |
+
+**EVOLUTION SPEED SCORE：0.321654x → 0.494956x（+54%）**
+
+**结论**：
+
+1. all-equal 0.043x → 0.55x（13 倍），few-unique 0.25x → 0.84x，sorted 0.071x → 0.75x（跑赢 pdqsort 的 partial insertion 路径），reverse 0.075x → 0.24x（3 倍）
+2. **固化了一个比较次数回归测试**（tests/diag.rs：断言 sorted/reverse/random ≤ 3 n log n）——这次 21 倍回退如果有它在，第一次 cargo test 就会报警
+3. 仍低于 Gen 4 的：random 全线（DNF 固有 1.44 倍比较开销，1.58 vs 1.10 n log n，已量化）和 nearly-sorted 10k（1.81→0.68）、organ-pipe（0.50→0.18）
+4. 下一代的明确方向：**hybrid 分区**（pdqsort 正式版架构）——默认 Hoare + 等值检测第二遍，只在检测到海量重复时才升级 DNF，拿回 random 的吞吐
+
 ## 死路记录
 
-（暂无）
+| 方案 | 结论 | 原因 |
+|---|---|---|
+| DNF 单独使用（无 partial insertion / 模式粉碎） | 死路，总分 -37% | sorted 输入自相似退火链，6.38 n log n，墙钟 21 倍回退 |
+| blind partial insertion（单段边扫边插） | 死路 | nearly-sorted/organ-pipe 的大位移插入陷井，三 regime 全面回退 |
+| break_patterns 单独作为退火链防线 | 不够 | 只把 6.38 降到 4.44 n log n，2 对交换打不碎 99% 有序的结构 |
