@@ -2,6 +2,17 @@
 //!
 //! 每一代都在 `EVOLUTION.md` 登记：改了什么、为什么、前后数据。
 //! 判分器：`src/bin/bench.rs`；正确性门禁：`tests/differential.rs`。
+//! **路由地图**（每个基准分布走哪条路径及原因）见 EVOLUTION.md 开头的
+//! 「路由地图」节——Gen 38 审计合成，改动路由前必读。
+//!
+//! 架构演进脉络（按 GENERATION 顺序简化）：
+//! - Gen 1-3：Hoare 分区 + median-of-3 + 小分区插入 cutoff
+//! - Gen 4：introsort 保险（小侧递归 + 深度预算 + heapsort fallback）
+//! - Gen 5：DNF 晋升 + 两段式 partial insertion + 模式粉碎
+//! - Gen 8 诊断 → Gen 9-10：分支免费 Lomuto × Hoare 双分区 + 三档信号
+//! - Gen 13：ninther pivot（Lomuto 路径）
+//! - Gen 14/19/21：洞式插入 / 零下降沿直达完成 / 逆序检测直达
+//! - Gen 24-25：降序游程精化（organ-pipe）+ 粗糙预筛（跳过下降沿扫描）
 
 pub mod inputs;
 

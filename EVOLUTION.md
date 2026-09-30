@@ -6,12 +6,47 @@
 - `cargo test && cargo test --release` 双 profile 不全绿的世代作废，不允许进基准（Gen 32 制度化）
 - 单轮提升 < 5% 判噪声（Gen 5 修正：批量计时后运行间噪声 ±5%，热/冷相位另计），重测；确认为死路的，「为何不行」也要记录
 - 跨代比较以「我们自己的绝对耗时」为准（Gen 2/3 确立：pdqsort 侧读数同样漂移）；改 bench 后先用绝对耗时金丝雀验证 bench 自身（Gen 31）
+- 单次总分可能含段中热漂移（Gen 37 实测 std 侧 +42% 尖峰，末尾 gauge 不反映）——判决用多轮绝对耗时对比
 - 每代一个 git commit
+
+## 路由地图（Gen 38 审计合成：每个基准分布走哪条路，改路由前必读）
+
+每个节点（len > 32）的路径决策，按顺序：
+
+1. **len ≤ 32** → 插入排序收尾（CUTOFF 叶）
+2. **深度预算 = 0** → heapsort fallback（introsort 保证）
+3. **粗糙预筛**（len ≥ 128，8 个等距采样点的 7 个相邻对）：
+   - 下降沿 2~6 = **粗糙**（random / few-unique / organ-pipe）→ 跳过下降沿扫描，直达 ninther + 分支免费 Lomuto
+   - 下降沿 0~1 = 平滑（sorted / all-equal / nearly-sorted）→ 完整路径
+   - 下降沿 7/7 = 逆序密度（reverse 家族）→ 完整路径（不可直达 Lomuto，逆序数据在 Lomuto 上是 1.47 n log n 灾难）
+4. **完整路径 - partial insertion 两段式**：
+   - 0 下降沿 → 证明已有序，一趟返回（all-equal / sorted 的 O(n) 直达）
+   - ≤8 下降沿 → 洞式插入直接排完返回（有序 + 少量错位）
+   - >8 下降沿 → 记 bail 位置（第 9 个下降沿处），进入三档路由
+5. **三档路由**（按 bail_pos）：
+   - ≤10 逆序密度 → 先试整段逆序检测（成功则一次 reverse 完成）；失败 → **Hoare**（逆序数据在 Hoare 上左区天然有序，partial 可接住）
+   - ≥48 且 bail 点前无连续降序游程 → **Hoare**（近乎有序，扫描提前收工：nearly-sorted 10k 1.6x vs Lomuto 0.74x）
+   - ≥48 且 bail 点前有连续降序游程 → **Lomuto + ninther**（大块降序尾 = organ-pipe 家族：Hoare 的 med-3 会取到区间最小值剥 1 层落 heapsort；ninther 取 ~1/8 分位值 3/4 剥层、~40 层深度 < 51 预算逃过 fallback）
+   - 中间密度 → **Lomuto + ninther**（消除扫描分支 ~50% mispredict，random 2.4 倍）
+6. **坏分区晋升**（任一侧 < len/8）：整段重跑 DNF 三路分区冻结 ==pivot 中段（重复密集数据的救命通道，few-unique 依赖它按值域收缩）；其中某侧 ≤ len/64（pivot 恰为极值）→ 分块轮换强粉碎（organ-pipe 剥层链的破坏者）
+7. **均衡分区**：小侧递归（栈深 ≤ log₂n）+ 大侧循环
+
+**各基准分布的顶层路径**：
+
+| 分布 | 路径 |
+|---|---|
+| random | 预筛判粗糙 → ninther + 分支免费 Lomuto |
+| all-equal | 预筛判平滑 → partial 0 下降沿直达完成 → O(n) |
+| sorted | 同上 |
+| reverse | 预筛判 7/7 逆序密度 → partial bail@9 → 逆序检测成功 → reverse() → O(n/2) |
+| nearly-sorted | 预筛判平滑 → partial bail@~900 → 稀疏无降尾 → Hoare（左区有序副产品 + partial 接住） |
+| few-unique | 预筛判粗糙 → ninther + Lomuto；坏分区时 DNF 冻结等值中段按值域收缩 |
+| organ-pipe | 预筛 desc=4 判粗糙 → Lomuto + ninther（3/4 剥层）；<128 的小切片走完整路径同样落在「稀疏 + 连续降尾 → Lomuto+ninther」 |
 
 
 ## 当前状态
 
-- 世代：**Gen 37**
+- 世代：**Gen 38**
 - EVOLUTION SPEED SCORE：**无分数结论（热相位 gauge ~10.38；本代为文档审计）**
 - 正确性：双 profile 全绿——debug 10 套件 / release 11 套件（含 200k mega stress）
 
@@ -57,6 +92,7 @@
 | Gen 35 | —（文档代） | EVOLUTION.md 一致性审计：清 32 行过期重复表 + 规则阈值漂移修正，35/35 代一一对应 | 2026-10-01 |
 | Gen 36 | —（API 代） | 公共 API 文档补全（复杂度契约/行为说明）+ clippy 重借用抛光清零，金丝雀平稳 | 2026-10-01 |
 | Gen 37 | 持平（负结果） | 采样融合收益落空于 L1 热（金丝雀 +0.5%）回退；差点被段中热漂移的 1.06 总分误导 | 2026-10-01 |
+| Gen 38 | —（文档代） | 路由地图审计合成：23 分布路径全量走查无错路；EVOLUTION.md 新增路由地图节，lib.rs 头部脉络化 | 2026-10-01 |
 
 ## Gen 0：教科书朴素版（基线）
 
@@ -997,8 +1033,21 @@ assert!(v.windows(2).all(|w| w[0] <= w[1]));
 **插曲：一次运行中热漂移造成的误判险情**：融合版某次全量运行总分 1.06（本会话热相位带为 0.89~0.93），险些读成「+17% 提升」。拉全表发现是 std 侧 100k 读数 0.78→1.11ms 的段中热漂移（我们侧同步 15.8→17.3ms），gauge（1M）在运行末尾已回落到 10.36 未反映段中尖峰。**教训：单次运行的总分可能包含段中相位漂移，判决必须用「同 case 绝对耗时的前后多轮对比」而非单次总分——金丝雀纪律再次立功。**
 
 **EVOLUTION SPEED SCORE：回退后 ~0.94（gauge 10.33，热相位）**
+## Gen 38：路由地图审计与合成（23 分布路径全量走查 + 文档缺口修复）
+
+**动机**：路由逻辑分散在 Gen 5~37 的注释里，缺一页合成视图——而它正是「改路由前必读」的关键资产。
+
+**审计过程**：逐分布走查全部 23 个基准 case 的路径（random / all-equal / sorted / reverse / nearly-sorted / few-unique / organ-pipe × 各规模），与设计意图逐条核对——**全部一致，无 silently 走错路的 case**（含 organ-pipe 100 这种 <128 不触发预筛、靠完整路径的「稀疏+连续降尾」分支正确落地的情形）。
+
+**产出**：EVOLUTION.md 开头新增「路由地图」节——7 步决策链 + 7 分布的顶层路径表；lib.rs 头部补「架构演进脉络」并移除过时的 GENERATION: 11 标记，指向路由地图。
+
+**验证**：双 profile 门禁绿（5 套件 each）；本次为文档改动，金丝雀平稳（判定：lib.rs 仅注释变更，代码路径零变动）。
+
+**EVOLUTION SPEED SCORE：无分数结论（热相位；文档合成代）**
 
 ## 死路记录
+
+| 方案 | 结论 | 原因 |
 |---|---|---|
 | DNF 单独使用（无 partial insertion / 模式粉碎） | 死路，总分 -37% | sorted 输入自相似退火链，6.38 n log n，墙钟 21 倍回退 |
 | blind partial insertion（单段边扫边插） | 死路 | nearly-sorted/organ-pipe 的大位移插入陷井，三 regime 全面回退 |
