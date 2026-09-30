@@ -152,7 +152,7 @@ fn two_sorted_runs_small() {
 #[cfg(not(debug_assertions))]
 fn release_only_mega_stress() {
     let mut rng = Rng::new(0x4E5A_6A5E);
-    let patterns: [&dyn Fn(usize, &mut Rng) -> Vec<u32>; 5] = [
+    let patterns: [&dyn Fn(usize, &mut Rng) -> Vec<u32>; 7] = [
         &|n, rng| (0..n).map(|_| rng.next_u32()).collect(),
         &|n, rng| (0..n).map(|_| rng.next_u32() % 7).collect(),
         &|n, _| (0..n as u32).collect(),
@@ -166,6 +166,18 @@ fn release_only_mega_stress() {
             }
             v
         },
+        // organ-pipe（Gen 34 补）：最深的自适应路径——sparse 信号 + 降序游程
+        // 检测 + Lomuto+ninther 3/4 剥层，200k 时深度 ~40 贴着深度预算 51 跑
+        &|n, _| {
+            (0..n)
+                .map(|i| {
+                    let half = if i < n / 2 { i } else { n - 1 - i };
+                    (half + 1) as u32
+                })
+                .collect()
+        },
+        // all-equal（Gen 34 补）：partial insertion 的 0 下降沿直达完成
+        &|n, _| vec![42u32; n],
     ];
     for (idx, pat) in patterns.iter().enumerate() {
         let n = 200_000usize;

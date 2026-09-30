@@ -10,8 +10,8 @@
 
 ## 当前状态
 
-- 世代：**Gen 33**
-- EVOLUTION SPEED SCORE：**无分数结论（热相位 gauge ~10.40；lint 清理 canary +1% 噪声内）**
+- 世代：**Gen 34**
+- EVOLUTION SPEED SCORE：**无分数结论（热相位 gauge ~10.38；mega stress 覆盖面 +2 模式）**
 - 正确性：双 profile 全绿——debug 10 套件 / release 11 套件（含 200k mega stress）
 
 ## 分数历史
@@ -52,6 +52,7 @@
 | Gen 31 | —（判分器代） | 相位 gauge 后置落地；harness 污染实验：前置负载 +17% 污染被测 case（金丝雀纪律沉淀） | 2026-10-01 |
 | Gen 32 | —（门禁代） | 双 profile 验证制度化 + release 百万级 stress（200k×5 模式，cfg 反选零成本） | 2026-10-01 |
 | Gen 33 | —（hygiene 代） | clippy 两处修正（int_plus_one、nonminimal_bool），canary +1% 噪声内，双门禁绿 | 2026-10-01 |
+| Gen 34 | —（门禁代） | mega stress 补 organ-pipe 200k（最深自适应路径，深度 ~40 贴预算 51）+ all-equal，7 模式全绿 | 2026-10-01 |
 
 ## 分数历史
 
@@ -978,6 +979,17 @@ assert!(v.windows(2).all(|w| w[0] <= w[1]));
 **保留项**：5 个 `&mut arr` 提示为非末次使用的显式重借用（clippy 建议的去掉 borrow 写法会编译错误，正确写法 `&mut *arr` 属纯抛光，不再增加 src 变动面）。
 
 **EVOLUTION SPEED SCORE：无分数结论（热相位 gauge ~10.40，canary +1% 噪声内）**
+
+## Gen 34：mega stress 覆盖面补齐（organ-pipe 200k —— 最深自适应路径的大规模验证）
+
+**缺口发现**：Gen 32 的 release-only mega stress 有 5 个模式，但**缺 organ-pipe**——而它恰是全部路径中最深的一条：sparse 信号 + 降序游程检测 → Lomuto+ninther 的 3/4 剥层链，200k 时递归深度 ~40 贴着深度预算 3·log₂(200k)=51 边界运行（既验证剥层收敛，也验证不误触 heapsort fallback）。另补 all-equal 200k（0 下降沿直达路径）。
+
+**验证**：
+- release：mega stress 7 模式（200k × 7）全绿，0.02s；organ-pipe 路径大规模正确 ✓
+- debug：mega 被 cfg 反选跳过，门禁耗时不变（10 套件 0.3s 级）
+- clippy 可操作警告数 0（Gen 33 清理生效）
+
+**EVOLUTION SPEED SCORE：无分数结论（热相位 gauge ~10.38）；门禁覆盖面 +2 模式**
 
 ## 死路记录
 
