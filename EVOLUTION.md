@@ -2,16 +2,17 @@
 
 计分规则（长期有效）：
 
-- 每代跑 `cargo run --release --bin bench`，记录 **EVOLUTION SPEED SCORE**（23 个用例几何平均，对标 std pdqsort，越高越好）
-- `cargo test` 不全绿的世代作废，不允许进基准
-- 提升 < 1% 判噪声，重测；确认为死路的，「为何不行」也要记录
+- 每代跑 `cargo run --release --bin bench`，记录 **EVOLUTION SPEED SCORE**（23 个用例几何平均，对标 std pdqsort，越高越好）+ **相位 gauge**（跨代比较须对 gauge；~8.8 冷相 / ~10.3 热相）
+- `cargo test && cargo test --release` 双 profile 不全绿的世代作废，不允许进基准（Gen 32 制度化）
+- 单轮提升 < 5% 判噪声（Gen 5 修正：批量计时后运行间噪声 ±5%，热/冷相位另计），重测；确认为死路的，「为何不行」也要记录
+- 跨代比较以「我们自己的绝对耗时」为准（Gen 2/3 确立：pdqsort 侧读数同样漂移）；改 bench 后先用绝对耗时金丝雀验证 bench 自身（Gen 31）
 - 每代一个 git commit
 
 
 ## 当前状态
 
-- 世代：**Gen 34**
-- EVOLUTION SPEED SCORE：**无分数结论（热相位 gauge ~10.38；mega stress 覆盖面 +2 模式）**
+- 世代：**Gen 35**
+- EVOLUTION SPEED SCORE：**无分数结论（热相位 gauge ~10.38；本代为文档审计）**
 - 正确性：双 profile 全绿——debug 10 套件 / release 11 套件（含 200k mega stress）
 
 ## 分数历史
@@ -53,38 +54,7 @@
 | Gen 32 | —（门禁代） | 双 profile 验证制度化 + release 百万级 stress（200k×5 模式，cfg 反选零成本） | 2026-10-01 |
 | Gen 33 | —（hygiene 代） | clippy 两处修正（int_plus_one、nonminimal_bool），canary +1% 噪声内，双门禁绿 | 2026-10-01 |
 | Gen 34 | —（门禁代） | mega stress 补 organ-pipe 200k（最深自适应路径，深度 ~40 贴预算 51）+ all-equal，7 模式全绿 | 2026-10-01 |
-
-## 分数历史
-
-| 世代 | 分数 | 关键变化 | 日期 |
-|---|---|---|---|
-| Gen 0 | 0.022178x | 教科书朴素版基线 | 2026-09-30 |
-| Gen 1 | 0.137721x | Hoare 分区 + 中间 pivot（6.2 倍提升） | 2026-09-30 |
-| Gen 2 | 0.207548x | median-of-three pivot（+51%） | 2026-09-30 |
-| Gen 3 | 0.327240x | 插入排序 cutoff=16（+58%） | 2026-09-30 |
-| Gen 4 | 0.321654x | introsort 保险（持平，换最坏 O(n log n) 硬保证） | 2026-09-30 |
-| Gen 5 | 0.494956x | pdqsort 三件套（DNF + partial insertion + 模式粉碎，+54%） | 2026-09-30 |
-| Gen 6 | 0.514827x | 混合分区：默认 Hoare + 坏分区升级 DNF（+4%） | 2026-09-30 |
-| Gen 7 | ~0.51x（持平） | 负结果代：等值计数升级 + CUTOFF 扫描，双双数据否决 | 2026-09-30 |
-| Gen 8 | ~0.51x（持平） | 负结果代：Hoare 指针化否决（-9%），定位真瓶颈=分支预测 | 2026-09-30 |
-| Gen 9 | 0.604114x | 双分区 + 下降沿信号：branchless Lomuto × Hoare（+16%） | 2026-09-30 |
-| Gen 10 | ~0.59x（持平） | 信号扩三档，nearly-sorted 绝对耗时 -51% | 2026-09-30 |
-| Gen 11 | ~0.58x（持平） | 退化分区强粉碎：organ-pipe 绝对耗时砍半 | 2026-09-30 |
-| Gen 12 | ~0.57x（持平） | branchless 分区裸指针化：random -3~5% | 2026-10-01 |
-| Gen 13 | ~0.60x | Ninther pivot：random 100k/1M 绝对耗时 -10~11% | 2026-10-01 |
-| Gen 14 | ~0.70x | 洞式插入排序：few-unique 10k -7%、nearly-sorted 10k -12% | 2026-10-01 |
-| Gen 15 | ~0.74x | CUTOFF 重扫（16→24）：架构变化后最优值上移 | 2026-10-01 |
-| Gen 16 | 绝对耗时大降 | LTO + codegen-units=1 + panic=abort：random 10k -45% | 2026-10-01 |
-| Gen 17 | ~0.67x（持平） | NINTHER_MIN 扫描确认 64；BlockQuicksort 推导存档 | 2026-10-01 |
-| Gen 18 | ~0.67x（持平） | 负结果：native 回退；BlockQuicksort 净收益归零，关闭 | 2026-10-01 |
-| Gen 19 | ~0.83x | 零下降沿跳过：all-equal / sorted 追平 pdqsort（0.99x） | 2026-10-01 |
-| Gen 20 | ~0.84x（持平） | 负结果：极端失衡直通粉碎，回退 | 2026-10-01 |
-| Gen 21 | ~0.98x | 逆序检测直达：reverse 追平 pdqsort；冷路径外描修布局回归 | 2026-10-01 |
-| Gen 22 | ~0.93x（持平） | 负结果：two-run 二次方 bug 修复（109 倍）但判分器 -10%（布局税），回退入档 | 2026-10-01 |
-| Gen 23 | ~0.94x | CUTOFF 二扫（24→32）：完成路径降价后 32 微弱占优 | 2026-10-01 |
-| Gen 24 | ~0.944x | 降序游程精化：organ-pipe 改走 Lomuto+ninther 逃过 heapsort；路由整体外描零布局税 | 2026-10-01 |
-| Gen 25 | ~1.017x | 粗糙数据预筛（8 采样三态）：跳过下降沿扫描直达 Lomuto，random 1M -18%、organ-pipe 追平 | 2026-10-01 |
-| Gen 26 | ~1.025x | NINTHER_MIN=64 机制确认（organ-pipe 尾段依赖）+ 预筛小切片门（三个 100 元素 case 恢复） | 2026-10-01 |
+| Gen 35 | —（文档代） | EVOLUTION.md 一致性审计：清 32 行过期重复表 + 规则阈值漂移修正，35/35 代一一对应 | 2026-10-01 |
 
 ## Gen 0：教科书朴素版（基线）
 
@@ -990,6 +960,17 @@ assert!(v.windows(2).all(|w| w[0] <= w[1]));
 - clippy 可操作警告数 0（Gen 33 清理生效）
 
 **EVOLUTION SPEED SCORE：无分数结论（热相位 gauge ~10.38）；门禁覆盖面 +2 模式**
+## Gen 35：EVOLUTION.md 一致性审计与修复（文档资产的防腐）
+
+**背景**：本文件历经 35 代编辑、多次 sed 事故与修复，一致性漂移已积累——作为项目的记忆核心，需要一次全面审计。
+
+**发现并修复**：
+1. **残留的过期重复表**（32 行）：早前一次头部修复留下了 Gen 0-26 的旧表副本，与正确表（Gen 0-34）并存——删除
+2. **规则文本漂移**：开头的「提升 < 1% 判噪声」是 Gen 5 时代作废的阈值，实际门槛已修正为 5%；双 profile 门禁（Gen 32）、gauge 对读（Gen 31）、绝对耗时判据（Gen 2/3）、bench 金丝雀（Gen 31）四条后续确立的规则均未收入——全部补入
+
+**审计方法（可复用）**：逐代核对「章节数 = 表格行数」（Gen 0-34 全部 = 1）、章节头计数（38 = 当前状态 + 分数历史 + 35 代 + 死路记录）、死路表行数与正文主张一致。
+
+**验证**：审计后 35/35 代一一对应；双 profile 门禁绿（5 套件 each）；文档从 1004 行收敛到 976 行。
 
 ## 死路记录
 
