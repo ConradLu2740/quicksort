@@ -5,7 +5,20 @@
 
 pub mod inputs;
 
-// GENERATION: 9→10 —— 双分区 + 三档下降沿密度信号：branchless Lomuto（无结构数据）× Hoare（有结构数据）
+// GENERATION: 11 —— 退化分区强粉碎（scramble_patterns：分块轮换击败 organ-pipe 剥层链）
+//
+// Gen 9-10 的双分区 + 三档信号之上新增：
+// 退化分区（DNF 升级后某侧 <= len/64 = pivot 恰为区间极值的铁证）时，
+// 对大侧做分块轮换粉碎（首四分之一 ↔ 末四分之一，len/4 对 swap）。
+//
+// 为什么需要它：organ-pipe 的三采样 (1, max, 1) 使 pivot 恒为区间最小值，
+// 每层只剥 1~2 个元素，2 对弱 break_patterns 打不碎「99% 两段有序」
+// （Gen 5 教训），最终落 heapsort（0.26~0.38ms）。分块轮换把两段式结构
+// 拦腰打碎，下一层 3-sort 的中位采样落到中位数值附近 —— organ-pipe 10k
+// 实测 0.26~0.38ms → 0.133ms（heapsort 成本线），speedup 0.19~0.41x → 0.49~0.52x。
+//
+// 触发极窄：random 数据 pivot 恰为极值的概率 ~3/(2n)/节点，期望成本
+// ~0.4 次交换/节点，可忽略；小侧（<128）自动 no-op 自限。
 //
 // 演进脉络：
 // - Gen 6：默认 Hoare + 坏分区升级 DNF（pdqsort 分区策略）
@@ -257,7 +270,7 @@ fn dnf_partition<T: Ord>(arr: &mut [T]) -> (usize, usize) {
     (lt, gt)
 }
 
-/// 坏分区后用少量确定性「伪随机」交换打碎自相似的输入结构。
+/// 弱模式粉碎：坏分区后用少量确定性「伪随机」交换打碎自相似的输入结构。
 /// 索引生成只依赖切片长度，不依赖数据 —— 静态输入无法自适应它。
 fn break_patterns<T>(arr: &mut [T]) {
     let len = arr.len();
@@ -277,6 +290,23 @@ fn break_patterns<T>(arr: &mut [T]) {
     }
     if c != d {
         arr.swap(c, d);
+    }
+}
+
+/// 强模式粉碎（Gen 11）：退化分区专用 —— pivot 恰为区间最小/最大值时
+/// （一侧 <= len/64），分区每层只剥 1~2 个元素，弱交换（2 对）打不碎
+/// 「99% 两段有序」的 organ-pipe 结构（Gen 5 教训：2 对交换只动 4/n 个元素）。
+/// 改用分块轮换：首四分之一与末四分之一整块互换（len/4 对 swap，O(len)），
+/// 两段式结构被拦腰打碎，下一层 3-sort 的中位采样落到中位数值附近。
+/// 索引只依赖长度不依赖数据；小侧调用时 len < 128 自动 no-op（自限）。
+fn scramble_patterns<T>(arr: &mut [T]) {
+    let len = arr.len();
+    if len < 128 {
+        return;
+    }
+    let q = len / 4;
+    for i in 0..q {
+        arr.swap(i, 3 * q + i);
     }
 }
 
@@ -341,7 +371,14 @@ fn quicksort_rec<T: Ord>(mut arr: &mut [T], mut depth_budget: usize) {
                 return; // 整段 == pivot，一趟扫描即完成
             }
             if d_left < len / UNBALANCED_DIV || d_right < len / UNBALANCED_DIV {
-                break_patterns_sides(&mut arr, lt, gt);
+                if d_left <= len / 64 || d_right <= len / 64 {
+                    // 退化分区（pivot 恰为区间极值，每层只剥 1~2 个元素）：
+                    // 强粉碎两侧（小侧不足 128 自动 no-op，自限）。
+                    scramble_patterns(&mut arr[..lt]);
+                    scramble_patterns(&mut arr[gt + 1..]);
+                } else {
+                    break_patterns_sides(&mut arr, lt, gt);
+                }
             }
             if d_left < d_right {
                 quicksort_rec(&mut arr[..lt], depth_budget);

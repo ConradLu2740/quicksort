@@ -9,8 +9,8 @@
 
 ## 当前状态
 
-- 世代：**Gen 10**
-- EVOLUTION SPEED SCORE：**~0.59x**（四轮中位 0.554/0.599/0.573/0.620；与 Gen 9 噪声带内持平，但 nearly-sorted 绝对耗时 -51%）
+- 世代：**Gen 11**
+- EVOLUTION SPEED SCORE：**~0.58x**（四轮中位 0.581/0.589/0.588/0.566；噪声带内持平，但 organ-pipe 绝对耗时砍半）
 - 正确性：7 个测试全绿
 
 ## 分数历史
@@ -27,7 +27,8 @@
 | Gen 7 | ~0.51x（持平） | 负结果代：等值计数升级 + CUTOFF 扫描，双双数据否决 | 2026-09-30 |
 | Gen 8 | ~0.51x（持平） | 负结果代：Hoare 指针化否决（-9%），定位真瓶颈=分支预测 | 2026-09-30 |
 | Gen 9 | 0.604114x | 双分区 + 下降沿信号：branchless Lomuto × Hoare（+16%） | 2026-09-30 |
-| Gen 10 | ~0.59x（持平） | 信号扩三档：稀疏下降沿也走 Hoare，nearly-sorted 绝对耗时 -51% | 2026-09-30 |
+| Gen 10 | ~0.59x（持平） | 信号扩三档，nearly-sorted 绝对耗时 -51% | 2026-09-30 |
+| Gen 11 | ~0.58x（持平） | 退化分区强粉碎：organ-pipe 绝对耗时砍半（0.26~0.38→0.133ms） | 2026-09-30 |
 
 ## Gen 0：教科书朴素版（基线）
 
@@ -402,6 +403,33 @@
 4. 测量噪声结论再确认：±5-6% 的运行间抖动主要由 pdqsort 侧亚 10µs 读数贡献，几何平均对单 case 结构改进的分辨率不足——判定改进以 absolute time 为准
 
 **下一步方向**：（a）organ-pipe（当前 worst 0.19~0.41x，高方差）——bail_pos≈n/2+9 的晚期密集模式值得专项（三分区本就该处理它，问题在 3-sort 选了 min 作 pivot）；（b）random 与 pdqsort 的 2.4 倍残余差距（Hoare 式交换效率 × 无分支扫描的合流，即 BlockQuicksort 方向）；（c）Ninther pivot。
+
+## Gen 11：退化分区强粉碎（分块轮换击败 organ-pipe 剥层链）
+
+**改动**：DNF 升级后若某侧 ≤ len/64（pivot 恰为区间极值的铁证），对大侧调用 `scramble_patterns`：首四分之一 ↔ 末四分之一整块轮换（len/4 对 swap）。小侧 <128 自动 no-op 自限。
+
+**动机**：organ-pipe 三采样 (1, max, 1) → pivot 恒为最小值 → 每层剥 1~2 个 → 弱 break_patterns（2 对交换，Gen 5 已证明打不碎 99% 两段有序）无效 → 落 heapsort（0.26~0.38ms）。
+
+**基准数据（absolute，ms，三轮）**：
+
+| case | Gen 10 ours | Gen 11 ours | pdqsort | speedup(Gen11) |
+|---|---|---|---|---|
+| organ-pipe 1k | 0.0102 | 0.0088 | 0.0045 | 0.515x |
+| organ-pipe 10k | 0.2554~0.3817 | 0.1330~0.1338 | 0.0658 | 0.492x |
+| random 1M | 22.70~22.82 | 22.28~22.60 | 8.9~10.3 | ~0.46x |
+| random 10k | 0.1070~0.1126 | 0.1083~0.1316 | 0.054~0.067 | ~0.51x |
+
+**EVOLUTION SPEED SCORE：四轮 0.581/0.589/0.588/0.566，中位 0.583x（Gen 10 中位 0.586，持平）**
+
+**结论**：
+
+1. **organ-pipe 10k 绝对耗时 0.26~0.38 → 0.133ms（砍半）**，三轮极稳定；成本落到 heapsort 线（Gen 4 实测纯 heapsort ≈ 0.112ms）——分块轮换成功把剥层链打断为均衡递归。speedup 从 0.19~0.41x 的混沌区间收敛到 0.49x
+2. random 无损：scramble 期望成本 ~0.4 次交换/节点（P(pivot 恰为极值) ≈ 3/(2n)），本轮观察到的 ±20% 摆动来自代码布局/机器负载——连 pdqsort 侧同向摆动 16~42%，非本代引入
+3. worst case 从 organ-pipe（0.19x）交棒给 reverse（0.235x， pdqsort 侧 0.0024ms 级读数噪声放大）
+
+**测量噪声再确认**：亚毫秒 case 的噪声带实为 ±20%（此前记的 ±5% 偏乐观）；判定改进仍以我们自己的 absolute time 多轮一致性为准。
+
+**下一步方向**：（a）organ-pipe 距 pdqsort 仍有 2 倍（0.133 vs 0.066ms）——scramble 后的第一层分区质量可再教研（如退化时换 Ninther 重取 pivot 而非粉碎）；（b）random 与 pdqsort 的 2.4 倍残余（1M 22.4 vs 8.9ms）是最大单块肉；（c）reverse 读数噪声治理（bench 侧增量：对小 n 用例加密重复）。
 
 ## 死路记录
 
