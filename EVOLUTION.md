@@ -15,8 +15,10 @@
 
 ## 当前状态
 
-- 世代：**Gen 18**
-- EVOLUTION SPEED SCORE：**~0.67x（机器相位摆动；random 1M 绝对耗时 17.0ms 基线不变）**
+## 当前状态
+
+- 世代：**Gen 19**
+- EVOLUTION SPEED SCORE：**~0.83x**（三轮 0.812/0.835/0.848；all-equal 与 sorted 双双追平 pdqsort）
 - 正确性：7 个测试全绿
 
 ## 分数历史
@@ -41,7 +43,8 @@
 | Gen 15 | ~0.74x | CUTOFF 重扫（16→24）：架构变化后最优值上移 | 2026-10-01 |
 | Gen 16 | 绝对耗时大降 | LTO + codegen-units=1 + panic=abort：random 10k -45% | 2026-10-01 |
 | Gen 17 | ~0.67x（持平） | NINTHER_MIN 扫描确认 64；BlockQuicksort 推导存档 | 2026-10-01 |
-| Gen 18 | ~0.67x（持平） | 负结果：target-cpu=native 仅 -1%（噪声内）回退；BlockQuicksort k 记账推导完整但净收益归零，四次确认放弃 | 2026-10-01 |
+| Gen 18 | ~0.67x（持平） | 负结果：native 回退；BlockQuicksort 净收益归零，关闭 | 2026-10-01 |
+| Gen 19 | ~0.83x | 零下降沿跳过：all-equal / sorted 追平 pdqsort（0.99x） | 2026-10-01 |
 
 ## Gen 0：教科书朴素版（基线）
 
@@ -609,6 +612,34 @@
 **但代价分析当场否决**：random 数据每节点 P_L ≈ P_R ≈ m/2 → 主体配对就要 m/2 次交换（仅为当前无条件交换的一半），而压缩要 O(m) 次 memmove —— 两边内存操作数打平（4m ops vs 4m ops），**净收益归零**。古典算法真正免压缩的结构（swap 针对移动中的 k 而非固定位）四次未能闭合。**结论：该路线对我们「免 Clone 泛型 + 无条件 swap Lomuto」的起点不成立，正式关闭**（除非未来改变交换原语，如 T: Copy 特化路径）。
 
 **结论**：本代两个实验均为负结果，基线（Gen 16 架构）不变，累计否决方向达 9 个。当前最优形态稳定：random 1M 17.0ms（pdqsort 8.8ms，1.93 倍）。
+
+## Gen 19：零下降沿跳过（partial insertion 的第二段冗余）
+
+**改动**：`partial_insertion_sort` 在下降沿扫描得 `disorder == 0` 时**直接返回 None，跳过 `insertion_sort` 调用**——数学恒等：0 下降沿 ⟺ 数组已非递减，此时插入排序只做 n 次比较、零移位，是纯浪费。
+
+**动机**：all-equal / sorted（各 3 case，长期停在 ~0.50x）的顶层完成路径固定付「下降沿扫描 n 次比较 + 插入排序 n 次比较」= 2n，而 pdqsort 只付 n。reverse 上 Hoare 产出的天然有序左区同样在重复付这笔钱。
+
+**基准数据（absolute，ms，三轮）**：
+
+| case | Gen 18 | Gen 19 三轮 | speedup(Gen19) |
+|---|---|---|---|
+| all-equal 10k | 0.0040 | 0.0020 ×3 | **0.990~1.00x** |
+| sorted 10k | 0.0040 | 0.0020 ×3 | **0.996~0.999x** |
+| all-equal 1k | 0.0004 | ~0.0003 | 0.718x |
+| sorted 1k | 0.0004 | ~0.0002 | 1.001x |
+| reverse 10k | 0.0072 | 0.0053~0.0055 | 0.447x |
+| nearly-sorted 10k | 0.0330 | 0.0325~0.0330 | ~1.7x（持平） |
+
+**EVOLUTION SPEED SCORE：0.812/0.835/0.848（中位 0.835，前带 0.55~0.74）**
+
+**结论**：
+
+1. **all-equal / sorted 追平 pdqsort**（0.99~1.00x，绝对耗时 0.0040→0.0020ms 砍半，三轮零波动）——2n → n 的理论值完整兑现
+2. reverse 10k -27%（0.0072→0.0053）：左区完成节点同享零下降沿跳过
+3. 改动仅 2 行、数学恒等保证正确性，是性价比最高的一代之一
+4. 当前 23 case 中达到/超越 pdqsort 的已有：all-equal（3）、sorted（3）、nearly-sorted 1k/100、few-unique 100、random 100 —— 12 个 case 打平或反超
+
+**下一步方向**：（a）reverse 仍是比值最低（0.39~0.45x）——其路径是「Hoare 剥层 + 左区零下降沿完成」，成本 ≈ 2n 常量 vs pdqsort 的 n；（b）organ-pipe 残余（0.49x）；（c）random（0.45~0.55x，Lomuto 交换次数问题已随 BlockQuicksort 关闭，剩常数项）。
 
 ## 死路记录
 

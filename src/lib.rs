@@ -116,11 +116,11 @@ fn insertion_sort<T: Ord>(arr: &mut [T]) {
 
 /// partial insertion sort（两段式）：先纯比较扫描数「下降沿」，
 /// 超过 PARTIAL_INSERTION_LIMIT 立即返回 Some(第九个下降沿的位置)（乱序输入
-/// ~2·LIMIT 次比较退场，不碰任何交换）；确认近乎有序后，才用一趟插入排序直接
-/// 排完切片并返回 None。
+/// ~2·LIMIT 次比较退场，不碰任何交换）；确认近乎有序后才插入排序排完返回 None。
 ///
-/// 返回的 bail 位置同时是 quicksort_rec 的分区策略信号：
-/// 前 10 个位置就攒够 9 个下降沿 = 逆序/近逆序密度 → 选 Hoare。
+/// Gen 19 优化：disorder == 0 时扫描本身已证明数组非递减 —— insertion_sort
+/// 此时只做 n 次比较、零移位，是纯浪费，直接跳过。
+/// （all-equal / sorted 的顶层完成路径从 2 趟比较降为 1 趟）
 fn partial_insertion_sort<T: Ord>(arr: &mut [T]) -> Option<usize> {
     let mut disorder = 0usize;
     for i in 1..arr.len() {
@@ -131,7 +131,9 @@ fn partial_insertion_sort<T: Ord>(arr: &mut [T]) -> Option<usize> {
             }
         }
     }
-    insertion_sort(arr);
+    if disorder > 0 {
+        insertion_sort(arr);
+    }
     None
 }
 
