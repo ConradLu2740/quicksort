@@ -19,8 +19,10 @@
 
 ## 当前状态
 
-- 世代：**Gen 20**
-- EVOLUTION SPEED SCORE：**~0.84x（回退后验证 0.845，与 Gen 19 持平；本代为负结果）**
+## 当前状态
+
+- 世代：**Gen 21**
+- EVOLUTION SPEED SCORE：**~0.98x**（本轮 0.977；reverse/all-equal/sorted 全部追平 pdqsort，剩余唯一缺口 organ-pipe 0.49x）
 - 正确性：7 个测试全绿
 
 ## 分数历史
@@ -48,7 +50,7 @@
 | Gen 18 | ~0.67x（持平） | 负结果：native 回退；BlockQuicksort 净收益归零，关闭 | 2026-10-01 |
 | Gen 19 | ~0.83x | 零下降沿跳过：all-equal / sorted 追平 pdqsort（0.99x） | 2026-10-01 |
 | Gen 20 | ~0.84x（持平） | 负结果：极端失衡直通粉碎（few-unique +31%、random +12%），回退 | 2026-10-01 |
-
+| Gen 21 | ~0.98x | 逆序检测直达：reverse 追平 pdqsort（0.997x）；冷路径外描修布局回归 | 2026-10-01 |
 
 ## Gen 0：教科书朴素版（基线）
 
@@ -667,6 +669,34 @@
 3. organ-pipe 的 4% 收益小于两项回退——净负，整体回退
 
 **结论**：DNF 升级通道对重复数据有不可替代的价值（等值冻结），极端失衡直通是错误抽象。累计否决方向达 10 个。
+
+## Gen 21：逆序检测直达（reverse 追平 pdqsort）+ 冷路径外描修布局回归
+
+**改动**：① 新增 `try_reverse_sorted`（`#[inline(never)]`）：下降沿密集信号（bail_pos ≤ 10）下一趟扫描确认整段非严格递减 → `arr.reverse()` 直接完成；② ipnsort 同款机制，替代 reverse 的 Hoare 剥层链（~4n 操作）。
+
+**动机**：reverse 是最后一个人字形缺口（0.39~0.45x，成本 ~4n vs pdqsort 的 ~n）。
+
+**基准数据（absolute，ms）**：
+
+| case | Gen 20 | Gen 21 |
+|---|---|---|
+| reverse 10k | 0.0053 | **0.0024（0.996~0.999x）** |
+| reverse 1k | 0.0006 | 0.0003（0.96x） |
+| reverse 100 | ~0.0001 | ~0.0001（0.85x） |
+| random 1M | 17.07 | 17.25~17.43（基线内，见下） |
+
+**EVOLUTION SPEED SCORE：0.977（三代带 0.85~0.98）**
+
+**关键插曲——代码布局回归与外描修复（重要方法论语码化）**：
+
+1. 初版（try_reverse_sorted 可内联）：reverse 追平达成，但 **random 1M +11%（17.1→19.0）**——random 数据根本不进该分支（bail_pos ~17 > 10），回退 100% 来自函数变大导致的**热循环代码布局位移**（与 Gen 20 同机制）
+2. 修复：`#[inline(never)]` 把冷路径外描 → random 1M 回到 17.25~17.43（基线内），reverse 收益保留
+3. **沉淀为 codebase 规则：给 quicksort_rec 等热函数新增冷路径代码必须外描（#[inline(never)]），否则用多轮绝对耗时验证 random 1M 是否被布局位移波及**
+
+**结论**：
+1. reverse 10k 追平 pdqsort（-55%），1k 0.96x；假阳成本 ~2 次比较（首个非递减位即失败）
+2. 打平或反超 pdqsort 的 case 达 13/23（all-equal 3、sorted 3、reverse 2、nearly-sorted 3、random 100、few-unique 100）
+3. 剩余唯一显著缺口：organ-pipe 0.49x
 
 ## 死路记录
 

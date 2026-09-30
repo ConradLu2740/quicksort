@@ -196,6 +196,32 @@ fn median_of_3_sort<T: Ord>(arr: &mut [T]) {
 /// 17.31/17.22/16.90/16.98ms（±3% 噪声内），64 确认（分数摆动为机器相位）。
 const NINTHER_MIN: usize = 64;
 
+/// 逆序检测（Gen 21，ipnsort 同款）：整段非严格递减则反转成升序、返回 true。
+///
+/// 只在 quicksort_rec 的「下降沿密集」信号下调用（前 10 位 9+ 下降沿）：
+/// - 真逆序数据：一趟 O(n) 确认 + O(n/2) 交换反转，替代 Hoare 剥层链（~4n 操作）
+/// - 假阳（头部密集但非全递减）：约 2 次比较即失败，成本可忽略
+///
+/// #[inline(never)]：冷路径外描，避免增大 quicksort_rec 主体导致热循环
+/// 代码布局位移（Gen 20/21 实测：布局位移可让 random 1M 劣化 ~11%）。
+#[inline(never)]
+fn try_reverse_sorted<T: Ord>(arr: &mut [T]) -> bool {
+    let n = arr.len();
+    let base = arr.as_ptr();
+    let mut i = 1usize;
+    // SAFETY: 条件先查 i < n 再解引用；i-1 >= 0
+    unsafe {
+        while i < n && *base.add(i) <= *base.add(i - 1) {
+            i += 1;
+        }
+    }
+    if i < n {
+        return false;
+    }
+    arr.reverse();
+    true
+}
+
 /// 为 branchless Lomuto 选 pivot：len < 64 中位三；否则 Tukey ninther
 /// （3 组三采样各取中位，再对 3 个中位取中位）。pivot 值放到 mid 位。
 /// ninther 把 pivot 秩次方差再压一档：random 1.26 → ~1.10 n log n
@@ -405,15 +431,16 @@ fn quicksort_rec<T: Ord>(mut arr: &mut [T], mut depth_budget: usize) {
         };
         depth_budget -= 1;
 
-        // 分区策略选择（Gen 9-10，三档下降沿密度信号）：
-        // - bail_pos <= 10：逆序密度（前 10 位 9+ 下降沿）→ Hoare：
-        //   双向交换的分区副产品是「左区有序」，partial insertion 免费接住
-        // - bail_pos >= 48：近乎有序（下降沿极稀疏）→ Hoare：
-        //   扫描提前收工，nearly-sorted 10k 实测 1.598x vs Lomuto 0.736x
+        // 分区策略选择（Gen 9-10，三档下降沿密度信号；Gen 21 增加逆序检测）：
+        // - bail_pos <= 10：逆序密度（前 10 位 9+ 下降沿）→ 先试逆序检测：
+        //   整段非严格递减则一次反转直接完成；否则走 Hoare（左区有序副产品）
+        // - bail_pos >= 48：近乎有序（下降沿极稀疏）→ Hoare：扫描提前收工
         // - 中间密度（random ~17、few-unique ~22、organ-pipe ~n/2+9）→ branchless Lomuto：
         //   消除扫描分支 mispredict，random 快 2.4 倍+
         // 原理：Hoare 吃有结构的数据，Lomuto 吃无结构数据。
-        // 两条路径统一到切分点 k：arr[..k] 与 arr[k..] 两侧。
+        if bail_pos <= DESCENDING_DENSE_BAIL && try_reverse_sorted(arr) {
+            return; // 整段逆序，已反转成升序
+        }
         let k = if bail_pos <= DESCENDING_DENSE_BAIL || bail_pos >= SPARSE_DESCENT_BAIL {
             median_of_3_sort(&mut arr); // Hoare 的哨兵不变量要求三位置有序
             hoare_partition(&mut arr)
