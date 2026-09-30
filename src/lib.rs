@@ -286,9 +286,11 @@ fn median_of_3_sort<T: Ord>(arr: &mut [T]) {
 }
 
 /// Ninther 阈值：len >= 此值用九采样中位的的中位，否则中位三。
-/// 盈亏点模型：ninther 省 ~13% 比较/交换（m·log2(m)·0.16），成本 ~20 比较，
-/// m=32 附近回本。Gen 17 实测扫描 32/64/128/256：random 1M 分别
-/// 17.31/17.22/16.90/16.98ms（±3% 噪声内），64 确认（分数摆动为机器相位）。
+/// 盈亏点模型：ninther 省 ~13% 比较/交换（m·log2(m)*0.16），成本 ~20 比较，m≈32 回本。
+/// Gen 17 扫描 32/64/128/256：random 1M 分别 17.31/17.22/16.90/16.98ms（±3% 内），定 64。
+/// **Gen 26 重扫确认 64 且解明机制**：64 vs 256 的差异全在 organ-pipe 10k
+/// （64: 1.00x vs 256: 0.80x）—— organ-pipe 递归尾段（64~256 小切片）必须靠
+/// ninther 维持 3/4 剥层，换 med-3 就重启剥层链落 heapsort：ninther 要铺到 CUTOFF 之上。
 const NINTHER_MIN: usize = 64;
 
 /// 逆序检测（Gen 21，ipnsort 同款）：整段非严格递减则反转成升序、返回 true。
@@ -520,10 +522,12 @@ fn quicksort_rec<T: Ord>(mut arr: &mut [T], mut depth_budget: usize) {
             heapsort(arr);
             return;
         }
-        // 粗糙数据预筛（Gen 25）：8 采样点 7 个相邻对 2~6 下降沿 → 粗糙，
+        // 粗糙数据预筛（Gen 25；Gen 26 增小切片门）：n >= 128 才付费采样
+        //（小切片完整扫描本来就 ≤17 次；三个 100 元素平滑 case 曾为 +8 采样
+        // 付 13% 相对成本）。8 采样点 7 个相邻对 2~6 下降沿 → 粗糙，
         // 跳过下降沿扫描直达 Lomuto+ninther（random 的 bail_pos ~17 次扫描/节点
         // 纯属浪费；organ-pipe 等距采样 desc=4 也落此档，目的地与 Gen 24 一致）。
-        let k = if route_direct_lomuto(arr) {
+        let k = if len >= 128 && route_direct_lomuto(arr) {
             depth_budget -= 1;
             lomuto_pivot(&mut arr); // Gen 13：ninther（len>=64）/ 中位三
             branchless_partition(&mut arr)
