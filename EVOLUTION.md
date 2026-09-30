@@ -9,9 +9,9 @@
 
 ## 当前状态
 
-- 世代：**Gen 5**
-- EVOLUTION SPEED SCORE：**0.494956x**
-- 正确性：6 个测试全绿（3 差分 + 2 lib 单测 + 1 比较次数回归测试）
+- 世代：**Gen 6**
+- EVOLUTION SPEED SCORE：**0.514827x**（三次运行 0.495 / 0.515 / 0.525，中位 0.515；较 Gen 5 +4%）
+- 正确性：7 个测试全绿（3 差分 + 3 lib 单测 + 1 比较次数回归）
 
 ## 分数历史
 
@@ -22,7 +22,8 @@
 | Gen 2 | 0.207548x | median-of-three pivot（+51%） | 2026-09-30 |
 | Gen 3 | 0.327240x | 插入排序 cutoff=16（+58%） | 2026-09-30 |
 | Gen 4 | 0.321654x | introsort 保险（持平，换最坏 O(n log n) 硬保证） | 2026-09-30 |
-| Gen 5 | 0.494956x | pdqsort 三件套：DNF 三路分区 + 两段式 partial insertion + 模式粉碎（+54%） | 2026-09-30 |
+| Gen 5 | 0.494956x | pdqsort 三件套（DNF + partial insertion + 模式粉碎，+54%） | 2026-09-30 |
+| Gen 6 | 0.514827x | 混合分区：默认 Hoare + 坏分区升级 DNF（+4%） | 2026-09-30 |
 
 ## Gen 0：教科书朴素版（基线）
 
@@ -270,6 +271,38 @@
 3. 仍低于 Gen 4 的：random 全线（DNF 固有 1.44 倍比较开销，1.58 vs 1.10 n log n，已量化）和 nearly-sorted 10k（1.81→0.68）、organ-pipe（0.50→0.18）
 4. 下一代的明确方向：**hybrid 分区**（pdqsort 正式版架构）——默认 Hoare + 等值检测第二遍，只在检测到海量重复时才升级 DNF，拿回 random 的吞吐
 
+## Gen 6：混合分区（默认 Hoare + 坏分区升级 DNF）
+
+**改动**：分区策略改为 pdqsort 正式版架构——默认 Hoare 扫描（random 1.10 n log n），分区失衡（某侧 < len/8）时整段重跑 DNF 冻结 ==pivot 中段；partial insertion / 模式粉碎 / 深限 fallback 全部保留。
+
+**动机**：Gen 5 全程 DNF 每层全量扫描（1.58 n log n），random 大输入只有 0.12~0.15x；但 Hoare 对重复密集数据没有等值冻结——用「失衡才升级」把两者的好处拼起来。
+
+**基准数据（absolute：我们自己的耗时，ms）**：
+
+| case | Gen 5 ours | Gen 6 ours | pdqsort | speedup(Gen6) |
+|---|---|---|---|---|
+| random 1k | 0.0064 | 0.0049 | 0.0045 | 0.911x |
+| random 1M | 63.08 | 56.37 | 8.93 | 0.159x |
+| all-equal 10k | 0.0037 | 0.0040 | 0.0020 | 0.501x |
+| few-unique 10k | 0.0131 | 0.0213 | 0.0130 | 0.576x |
+| sorted 10k | 0.0040 | 0.0040 | 0.0020-0.0030 | ~0.75x |
+| reverse 10k | 0.0098 | 0.0082 | 0.0024 | 0.292x |
+| nearly-sorted 10k | 0.0830 | 0.0342 | 0.0559 | 1.635x |
+| organ-pipe 10k | 0.2987 | 0.3928 | 0.0549 | 0.140x |
+
+**EVOLUTION SPEED SCORE：0.494956x → 0.514827x（+4%，三次运行 0.495/0.515/0.525）**
+
+**结论**：
+
+1. random 全线真实提速（1M 绝对耗时 63.1→56.4ms，1k 0.906→0.911x；1k 级别从 0.571 跳到 0.90+）——Hoare 扫描 + 少触发升级生效
+2. nearly-sorted 10k 0.68→1.64x（partial insertion 完成更多中层切片）；reverse 0.238→0.292x
+3. **few-unique 回吐（0.836→0.576）**：它的分区按值域是均衡的（2/5 vs 2/5），永远不触发失衡升级，等值段无人冻结。这是明确的下一代目标
+4. organ-pipe 0.184→0.140 小幅回吐（升级通道在 organ-pipe 上多付了 2n 过路费，最终仍靠 heapsort fallback 收场）
+
+**本代事故记录（门禁当场抓住，提交前已修复）**：抽 `break_patterns_if_unbalanced` helper 时把 break_patterns 误作用于**整段**而非左右两侧，打乱了 DNF 的三段边界 → random 数据输出未排序。bench 的 per-case sortedness 检查和 diag 测试同时报警。修复后新增 1 个 lib 单测直接压测升级通道（3 值重复密集数据）。教训：模式粉碎只能作用于分区边界之内。
+
+**下一步方向**：few-unique 的等值探测——Hoare 的扫描停止点上加 `== pivot` 检查做等值外推（Bentley-McIlroy 风格，分支预测器对 distinct 数据的恒假分支几乎免费），用真实计数替代已否决的采样探测。
+
 ## 死路记录
 
 | 方案 | 结论 | 原因 |
@@ -277,3 +310,4 @@
 | DNF 单独使用（无 partial insertion / 模式粉碎） | 死路，总分 -37% | sorted 输入自相似退火链，6.38 n log n，墙钟 21 倍回退 |
 | blind partial insertion（单段边扫边插） | 死路 | nearly-sorted/organ-pipe 的大位移插入陷井，三 regime 全面回退 |
 | break_patterns 单独作为退火链防线 | 不够 | 只把 6.38 降到 4.44 n log n，2 对交换打不碎 99% 有序的结构 |
+| 分区后「等值采样探测」（两侧各 4 位，命中≥2 即升级 DNF） | 否决，总分 -4% | few-unique 部分恢复（0.514→0.608）但 random 全线付 ~10%（每节点 8 次比较），净负。回退 |
