@@ -74,3 +74,73 @@ fn randomized_against_std() {
         check(&data);
     }
 }
+
+#[test]
+fn large_scale_differential() {
+    // 大规模差分（Gen 30 新增）：此前覆盖率止步 800 元素，
+    // 大 n 下的病态（深层递归、深度预算路径、叶子行为）只有规模能触发。
+    const N: usize = 20_000;
+    let mut rng = Rng::new(0xA11CE);
+    let names = ["random", "few-unique", "sorted", "reverse", "nearly-sorted", "organ-pipe"];
+    for name in names {
+        let data: Vec<u32> = match name {
+            "random" => (0..N).map(|_| rng.next_u32()).collect(),
+            "few-unique" => (0..N).map(|_| rng.next_u32() % 3).collect(),
+            "sorted" => (0..N as u32).collect(),
+            "reverse" => (0..N as u32).rev().collect(),
+            "nearly-sorted" => {
+                let mut v: Vec<u32> = (0..N as u32).collect();
+                for _ in 0..N / 100 {
+                    let i = (rng.next_u64() as usize) % N;
+                    let j = (rng.next_u64() as usize) % N;
+                    v.swap(i, j);
+                }
+                v
+            }
+            "organ-pipe" => (0..N)
+                .map(|i| {
+                    let half = if i < N / 2 { i } else { N - 1 - i };
+                    (half + 1) as u32
+                })
+                .collect(),
+            _ => unreachable!(),
+        };
+        check(&data);
+    }
+}
+
+#[test]
+fn generic_type_paths() {
+    // 泛型路径覆盖（Gen 30 新增）：i64（负值域）与 String（非 Copy、含 Drop、
+    // 比较非平凡）—— 此前全部测试只走 u32 单态化。
+    let mut v: Vec<i64> = vec![-5, 3, 0, -7, 3, i64::MIN, i64::MAX, -1, 0];
+    v.sort_unstable();
+    let mut ours = v.clone();
+    // 打乱（固定动作）后排序
+    ours.reverse();
+    quicksort(&mut ours);
+    assert_eq!(ours, v);
+
+    let mut words = vec![
+        "banana".to_string(),
+        "apple".to_string(),
+        "cherry".to_string(),
+        "apple".to_string(),
+        "date".to_string(),
+    ];
+    let mut expect = words.clone();
+    expect.sort_unstable();
+    quicksort(&mut words);
+    assert_eq!(words, expect);
+}
+
+#[test]
+fn two_sorted_runs_small() {
+    // 两段有序输入（Gen 22 记录的已知二次方类，n=2k 保持 debug 快速）：
+    // 断言正确性（该类的性能修复因布局税在 Gen 22/28 两度入档未落地，
+    //  correctness 不受影响——已知慢但正确）。
+    let n = 2_000usize;
+    let half = n / 2;
+    let data: Vec<u32> = (0..half as u32).chain(0..half as u32).collect();
+    check(&data);
+}

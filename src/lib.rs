@@ -147,12 +147,13 @@ fn partition_router<T: Ord>(arr: &mut [T], bail_pos: usize) -> Option<usize> {
 }
 
 /// partial insertion sort 的容忍乱序数：扫描中「下降沿」超过此值即放弃。
-///
 /// 为什么必须两段式（先数下降沿、后插入）：
 /// 单段边扫边插时，nearly-sorted 的第一个错位元素可能插入位移上千步，
 /// 成本已经 O(n) 才数到第二个下降沿 —— 实测让 nearly-sorted 慢了 8 倍。
 /// 两段式下，乱序输入最多 ~2·LIMIT 次比较即退场（逆向/风琴/随机都在 ~16 次比较内退场），
 /// 确认近乎有序后才付出一次性的 O(n) 插入。
+/// Gen 30 扫描 8/16/32：8 确认。更高值把「稀疏下降沿但大位移」的切片放进 O(k²) 插入
+/// （16/32 时 nearly-sorted 10k +11%/+21%、总分 -35%/-42%）。
 const PARTIAL_INSERTION_LIMIT: usize = 8;
 
 /// 逆序密度信号阈值：partial insertion 的 bail 位置 <= 此值 → 判定逆序/近逆序。
