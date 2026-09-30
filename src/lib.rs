@@ -83,13 +83,29 @@ pub fn quicksort<T: Ord>(arr: &mut [T]) {
     }
 }
 
-/// 小分区收尾：交换式插入排序（泛型 T: Ord 免 Clone 的标准写法）。
+/// 小分区收尾：洞式插入排序（Gen 14：移位从交换式的 3 次移动降为 1 次 memmove）。
+///
+/// 做法：待插值 ptr::read 进 ManuallyDrop 洞位变量，比它大的元素逐一
+/// ptr::copy 右移（memmove），最后 ptr::write 落位。
+///
+/// SAFETY：读出的值由 ManuallyDrop 持有、绝不 drop（泛型 T 可能有 Drop），
+/// 全程索引不越界（j 递减有 j > 0 保护，落位点 j 必在洞位起点 0..=i 内）。
 fn insertion_sort<T: Ord>(arr: &mut [T]) {
-    for i in 1..arr.len() {
-        let mut j = i;
-        while j > 0 && arr[j] < arr[j - 1] {
-            arr.swap(j, j - 1);
-            j -= 1;
+    let n = arr.len();
+    let base = arr.as_mut_ptr();
+    for i in 1..n {
+        // SAFETY: i < n；洞位变量见函数级注释
+        unsafe {
+            if *base.add(i) < *base.add(i - 1) {
+                let saved: std::mem::ManuallyDrop<T> =
+                    std::mem::ManuallyDrop::new(std::ptr::read(base.add(i)));
+                let mut j = i;
+                while j > 0 && *base.add(j - 1) > *saved {
+                    std::ptr::copy(base.add(j - 1), base.add(j), 1);
+                    j -= 1;
+                }
+                std::ptr::write(base.add(j), std::mem::ManuallyDrop::into_inner(saved));
+            }
         }
     }
 }
