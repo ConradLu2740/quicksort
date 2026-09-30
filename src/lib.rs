@@ -71,6 +71,38 @@ fn descending_run_at_bail<T: Ord>(arr: &[T], bail_pos: usize) -> bool {
     true
 }
 
+/// 粗糙数据预筛（Gen 25）：8 个等距采样点的 7 个相邻对里下降沿数为 2~6
+/// → 判定「粗糙」→ 跳过下降沿扫描（省 O(峰值位置) 成本）直达 Lomuto+ninther。
+///
+/// 三态设计的理由：
+/// - 7/7 全下降 = 逆序密度（reverse 家族）→ 必须走完整路径（逆序检测 + Hoare）
+/// - <=1 下降 = 平滑（nearly-sorted / sorted / all-equal）→ 必须走完整扫描
+///   （稀疏路由 + near-complete 完成路径）
+/// - 2~6 下降 = 粗糙（random：desc ~ Bin(7, 0.5)，落入此档概率 ~94%）→ 路由
+///   结论恒为 Lomuto，扫描纯属浪费；organ-pipe 的等距采样 desc=4 也落此档
+///   —— 与 Gen 24 的目的地（Lomuto+ninther）一致，且省掉 O(峰值) 扫描
+///
+/// 筛子只选择分区器、不参与正确性：任何档位走的都是合法分区路径。
+/// 误触分析：nearly-sorted（1% 密度）落入粗糙档概率 ~0.2%；random 落入
+/// 完整档概率 ~7%（付 17 次扫描，可忽略）。
+#[inline(never)]
+fn route_direct_lomuto<T: Ord>(arr: &[T]) -> bool {
+    let n = arr.len();
+    if n < 16 {
+        return false; // 小切片完整扫描本来就便宜
+    }
+    let step = (n - 1) / 7;
+    let mut desc = 0usize;
+    for i in 1..8 {
+        let p = (i * step).min(n - 1);
+        let q = ((i - 1) * step).min(n - 1);
+        if p != q && arr[p] < arr[q] {
+            desc += 1;
+        }
+    }
+    (2..7).contains(&desc)
+}
+
 /// 分区路由决策（Gen 24 外描版）：返回 true 走 Hoare，false 走 branchless Lomuto。
 ///
 /// 三档下降沿密度信号（quicksort_rec 传入 partial insertion 的 bail 位置）：
@@ -488,16 +520,26 @@ fn quicksort_rec<T: Ord>(mut arr: &mut [T], mut depth_budget: usize) {
             heapsort(arr);
             return;
         }
-        // 近乎有序的切片直接排完返回，不进入分区路径
-        let Some(bail_pos) = partial_insertion_sort(arr) else {
-            return;
-        };
-        depth_budget -= 1;
-
-        // 分区路由（Gen 24 起整体外描为 partition_router：三档信号 + 逆序检测
-        // + 降序游程精化 + 分区器选择全在冷函数里，热循环只剩一次调用与 Option 匹配）
-        let Some(k) = partition_router(&mut arr, bail_pos) else {
-            return; // 整段逆序，已反转成升序
+        // 粗糙数据预筛（Gen 25）：8 采样点 7 个相邻对 2~6 下降沿 → 粗糙，
+        // 跳过下降沿扫描直达 Lomuto+ninther（random 的 bail_pos ~17 次扫描/节点
+        // 纯属浪费；organ-pipe 等距采样 desc=4 也落此档，目的地与 Gen 24 一致）。
+        let k = if route_direct_lomuto(arr) {
+            depth_budget -= 1;
+            lomuto_pivot(&mut arr); // Gen 13：ninther（len>=64）/ 中位三
+            branchless_partition(&mut arr)
+        } else {
+            // 平滑/逆序密度：走完整路径（partial insertion 的下降沿扫描 +
+            // 近乎有序完成 + 三档路由 + 逆序检测 + 降序游程精化）
+            let Some(bail_pos) = partial_insertion_sort(arr) else {
+                return;
+            };
+            depth_budget -= 1;
+            // 分区路由（Gen 24 起整体外描为 partition_router：三档信号 + 逆序检测
+            // + 降序游程精化 + 分区器选择全在冷函数里，热循环只剩一次调用与匹配）
+            let Some(k) = partition_router(&mut arr, bail_pos) else {
+                return; // 整段逆序，已反转成升序
+            };
+            k
         };
         let left_len = k;
         let right_len = len - k;
