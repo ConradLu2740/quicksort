@@ -5,23 +5,25 @@
 
 pub mod inputs;
 
-// GENERATION: 2 —— Hoare 分区 + median-of-three pivot
+// GENERATION: 3 —— Hoare + median-of-three + 小分区插入排序 cutoff
 //
-// 相对 Gen 1 的改进动机：
-// - 单取中间元素，pivot 秩次方差大；首/中/尾取中位数后，
-//   random 输入比较次数从 ~1.39·n·log n 降至 ~1.19·n·log n（期望 ~15%）
-// - len <= 3 时「三元素排序」本身就是完全排序，直接返回
-//   （小分区提前收手的雏形，为 Gen 3 插入排序 cutoff 铺路）
+// 相对 Gen 2 的改进动机：
+// - Gen 2 的递归一直钻到 len <= 3 才停；每个不足 20 个元素的小叶子
+//   仍要付「3 次中位比较 + Hoare 分区 + 两次递归调用」的固定成本，
+//   而小分区占全部叶子的绝大多数 —— 这是当前最大的常数项浪费
+// - len <= 16 直接插入排序：近乎有序的小切片上接近线性、无递归开销
 //
-// 已知的、本代不解决的病灶（诚实记录）：
-// - organ-pipe（风琴形）：首/中/尾 = (1, max, 1)，中位数 = 1 = 最小值，
-//   pivot 恒取极小值 → 仍 O(n²)。median-of-three 对静态构型杀手无效，
-//   真正的防线是 Gen 4 深限 fallback / Gen 6 模式识别
+// 已知的、本代不解决的病灶：
+// - organ-pipe 首轮后已退化为近似随机（Gen 2 实测），不再灾难
+// - 最坏情况分区深度仍无保护（Gen 4 深限）
 //
 // 实现要点（不变式，改动时勿破坏）：
 // 1. 三元素排序后 a[0] <= a[mid] <= a[hi]，pivot 值 = a[mid]，pivot 位置 p = mid 恒非末位
 // 2. swap 碰到 pivot 位时 p 跟随移动，a[p] 恒为 pivot 值 —— Hoare 扫描不会越界
 // 3. 分区边界 j 满足 arr[..=j] <= arr[j+1..] 且 j <= len-2，两侧严格变小
+
+/// 小分区 cutoff：len <= 此值的子区间改用插入排序，不再分区递归。
+const CUTOFF: usize = 16;
 
 /// 原地快速排序（升序）。
 pub fn quicksort<T: Ord>(arr: &mut [T]) {
@@ -30,9 +32,21 @@ pub fn quicksort<T: Ord>(arr: &mut [T]) {
     }
 }
 
+/// 小分区收尾：交换式插入排序（泛型 T: Ord 免 Clone 的标准写法）。
+fn insertion_sort<T: Ord>(arr: &mut [T]) {
+    for i in 1..arr.len() {
+        let mut j = i;
+        while j > 0 && arr[j] < arr[j - 1] {
+            arr.swap(j, j - 1);
+            j -= 1;
+        }
+    }
+}
+
 fn quicksort_rec<T: Ord>(arr: &mut [T]) {
     let len = arr.len();
-    if len <= 1 {
+    if len <= CUTOFF {
+        insertion_sort(arr);
         return;
     }
     let hi = len - 1;
@@ -47,9 +61,6 @@ fn quicksort_rec<T: Ord>(arr: &mut [T]) {
     }
     if arr[hi] < arr[mid] {
         arr.swap(mid, hi);
-    }
-    if len <= 3 {
-        return; // 三个位置就是全部元素，已全序
     }
 
     let mut i = 1usize; // a[0] <= pivot，左扫描从 1 开始（pivot 位天然挡住越界）
