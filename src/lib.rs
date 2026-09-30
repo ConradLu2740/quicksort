@@ -199,8 +199,8 @@ fn hoare_partition<T: Ord>(arr: &mut [T]) -> usize {
     }
 }
 
-/// 分支免费版 Lomuto 分区（Gen 9：branchless 化）。调用方须先做 median_of_3_sort，
-/// pivot 取中位值 = a[mid]。
+/// 分支免费版 Lomuto 分区（Gen 9：branchless 化；Gen 12：裸指针去边界检查）。
+/// 调用方须先做 median_of_3_sort，pivot 取中位值 = a[mid]。
 ///
 /// 做法：每步「无条件 swap(i, j) + 条件自增 i」——比较结果只走 cmov 不进分支：
 /// - arr[j] < pivot：正常 Lomuto，小于者换到左段，i 前进
@@ -224,12 +224,16 @@ fn branchless_partition<T: Ord>(arr: &mut [T]) -> usize {
     // SAFETY: mid < len；副本包 ManuallyDrop 绝不 drop
     let pivot: std::mem::ManuallyDrop<T> =
         unsafe { std::mem::ManuallyDrop::new(std::ptr::read(arr.as_ptr().add(mid))) };
+    let base = arr.as_mut_ptr();
 
     let mut i = 0usize;
     for j in 0..len {
-        let less = arr[j] < *pivot;
-        // 无条件交换；cmov 化的条件自增。LLVM 将 `less as usize` 编译为 cmov/setcc。
-        arr.swap(i, j);
+        // SAFETY: 不变式 i <= j < len（i 每轮至多追平 j、从不反超，见函数级注释）
+        let less = unsafe { *base.add(j) < *pivot };
+        // SAFETY: 同上。无条件交换 + cmov 化的条件自增（LLVM 编译为 cmov/setcc）。
+        unsafe {
+            std::ptr::swap(base.add(i), base.add(j));
+        }
         i += less as usize;
     }
     i

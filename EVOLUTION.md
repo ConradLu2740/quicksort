@@ -9,8 +9,8 @@
 
 ## 当前状态
 
-- 世代：**Gen 11**
-- EVOLUTION SPEED SCORE：**~0.58x**（四轮中位 0.581/0.589/0.588/0.566；噪声带内持平，但 organ-pipe 绝对耗时砍半）
+- 世代：**Gen 12**
+- EVOLUTION SPEED SCORE：**~0.57x**（三轮 0.561/0.575/0.577，噪声带内持平；random 绝对耗时 -3~5%）
 - 正确性：7 个测试全绿
 
 ## 分数历史
@@ -28,7 +28,8 @@
 | Gen 8 | ~0.51x（持平） | 负结果代：Hoare 指针化否决（-9%），定位真瓶颈=分支预测 | 2026-09-30 |
 | Gen 9 | 0.604114x | 双分区 + 下降沿信号：branchless Lomuto × Hoare（+16%） | 2026-09-30 |
 | Gen 10 | ~0.59x（持平） | 信号扩三档，nearly-sorted 绝对耗时 -51% | 2026-09-30 |
-| Gen 11 | ~0.58x（持平） | 退化分区强粉碎：organ-pipe 绝对耗时砍半（0.26~0.38→0.133ms） | 2026-09-30 |
+| Gen 11 | ~0.58x（持平） | 退化分区强粉碎：organ-pipe 绝对耗时砍半 | 2026-09-30 |
+| Gen 12 | ~0.57x（持平） | branchless 分区裸指针化：random 绝对耗时 -3~5% | 2026-09-30 |
 
 ## Gen 0：教科书朴素版（基线）
 
@@ -430,6 +431,29 @@
 **测量噪声再确认**：亚毫秒 case 的噪声带实为 ±20%（此前记的 ±5% 偏乐观）；判定改进仍以我们自己的 absolute time 多轮一致性为准。
 
 **下一步方向**：（a）organ-pipe 距 pdqsort 仍有 2 倍（0.133 vs 0.066ms）——scramble 后的第一层分区质量可再教研（如退化时换 Ninther 重取 pivot 而非粉碎）；（b）random 与 pdqsort 的 2.4 倍残余（1M 22.4 vs 8.9ms）是最大单块肉；（c）reverse 读数噪声治理（bench 侧增量：对小 n 用例加密重复）。
+
+## Gen 12：branchless 分区裸指针化（去边界检查，小胜）
+
+**改动**：`branchless_partition` 的比较与交换从安全索引改为裸指针（`*base.add(j)` / `ptr::swap`），不动任何结构（无条件 swap + cmov 自增保持不变）。SAFETY 依据：不变式 `i ≤ j < len`（i 每轮至多追平 j）。
+
+**动机**：random 与 pdqsort 仍有 2.4 倍差距（1M 22.4 vs 8.9ms）。分解：Lomuto 每层 n 次交换（Hoare 式 ~n/4），且每次 swap 带 2 次边界检查。
+
+**基准数据（absolute，ms，多轮）**：
+
+| case | Gen 11 best | Gen 12 best | pdqsort |
+|---|---|---|---|
+| random 1k | 0.0045 | 0.0042 | 0.0040 |
+| random 10k | 0.1070 | 0.1070~0.1128 | 0.054 |
+| random 100k | 2.15 | 2.08 | 0.90 |
+| random 1M | 22.28 | 21.36~21.54 | 8.9~10.3 |
+
+**EVOLUTION SPEED SCORE：0.561/0.575/0.577（中位 0.575，持平）；random 绝对耗时 -3~5%**
+
+**结论**：
+
+1. random 五项全部达到或优于历史最佳（1M -3~4%、100k -3%、1k -6%），方向与理论一致但**单 case 幅度在 ±20% 噪声带内**——记为小胜
+2. 边界检查不是主瓶颈（与 Gen 8 的指针实验结论合并印证）；**真正的剩余差距是交换次数本身**：Lomuto 每层 n 次 swap vs pdqsort 家族（ipnsort/BlockQuicksort）的 Hoare 式 ~n/4 + 块扫描
+3. 下一目标明确且是最大单块肉：random 1M 21.5ms vs pdqsort 8.9ms 的 2.4 倍差距，合流方案 = BlockQuicksort 式块分区（块内偏移统计替代逐元素分支/无条件交换）
 
 ## 死路记录
 
