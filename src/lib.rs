@@ -253,7 +253,47 @@ fn partial_insertion_sort<T: Ord>(arr: &mut [T]) -> Option<usize> {
         }
     }
     if disorder > 0 {
-        insertion_sort(arr);
+        insertion_with_budget(arr) // Gen 22 存档 / Gen 28/39 布局窗口重试
+    } else {
+        None // Gen 19：扫描本身已证明数组非递减
+    }
+}
+
+/// 带移位预算的洞式插入（Gen 22 存档，Gen 39 第三次布局窗口重试）：
+/// disorder <= LIMIT 时执行，全程数总移位，超过 budget 中途放弃
+/// （洞已填、前缀有序、无副作用，返回 Some(i) 走分区路径）。
+///
+/// 为什么必须数移位（Gen 22 修复的二次方陷阱）：「两段有序」输入
+/// （[升序 run | 升序 run]）只有 1 个下降沿但插入位移 O(n²/4)，
+/// 实测 n=100k 要 259ms（应为 ~0.3ms）。
+#[inline(never)]
+fn insertion_with_budget<T: Ord>(arr: &mut [T]) -> Option<usize> {
+    // 预算 n/8+32 —— 对「少量错位元素」（总位移有界）足够排完；
+    // 对「整段位移型」（两段有序等）中途放弃。
+    let budget = arr.len() / 8 + 32;
+    let mut shifts = 0usize;
+    let n = arr.len();
+    let base = arr.as_mut_ptr();
+    for i in 1..n {
+        // SAFETY: i < n；洞位变量在函数退出前必然 write 回洞位
+        unsafe {
+            if *base.add(i) < *base.add(i - 1) {
+                let saved: std::mem::ManuallyDrop<T> =
+                    std::mem::ManuallyDrop::new(std::ptr::read(base.add(i)));
+                let mut j = i;
+                while j > 0 && *base.add(j - 1) > *saved {
+                    std::ptr::copy(base.add(j - 1), base.add(j), 1);
+                    shifts += 1;
+                    j -= 1;
+                    if shifts > budget {
+                        // 填洞后放弃：数组仍为合法排列，落分区路径
+                        std::ptr::write(base.add(j), std::mem::ManuallyDrop::into_inner(saved));
+                        return Some(i);
+                    }
+                }
+                std::ptr::write(base.add(j), std::mem::ManuallyDrop::into_inner(saved));
+            }
+        }
     }
     None
 }
