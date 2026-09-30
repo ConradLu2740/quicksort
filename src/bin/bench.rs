@@ -112,6 +112,19 @@ fn run() {
     );
     println!("worst case: {} ({:.3}x)", worst.0, worst.1);
 
+    // 相位 gauge（Gen 31，放在矩阵之后测量——实测提前跑会改变分配器/缓存
+    // 状态、污染被测 case 达 +10%，只能后置）：固定参照负载作为「机器
+    // 温度计」随分数输出。冷/热相位可让 pdqsort 侧读数摆动 ~20%，
+    // 单看总分会误读跨代比较——今后每个 EVOLUTION.md 条目都配 gauge 阅读。
+    let gauge = {
+        let n = 1_000_000usize;
+        let mut rng = sort::inputs::Rng::new(0x6A5E_6A5E);
+        let data: Vec<u32> = (0..n).map(|_| rng.next_u32()).collect();
+        let (ms, _ok) = batch_time(&data, 3, false);
+        ms
+    };
+    println!("phase gauge (std 1M random): {gauge:.3} ms —— 跨代比较请对 gauge（~8.8 = 冷相, ~10.3 = 热相）");
+
     if !all_ok {
         eprintln!("CORRECTNESS GATE FAILED: produced an unsorted array!");
         std::process::exit(1);
