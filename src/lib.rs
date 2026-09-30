@@ -142,6 +142,12 @@ fn median_of_3_sort<T: Ord>(arr: &mut [T]) {
 
 /// Hoare 分区（pivot 位置跟踪，免 Clone）。调用方须先做 median_of_3_sort。
 /// 返回边界 j：arr[..=j] <= pivot，arr[j+1..] > pivot，且 j <= len-2。
+///
+/// 已实验并否决（Gen 8）：改成「pivot 值 ptr::read 进 ManuallyDrop 本地副本 +
+/// swap(0, mid) 钉位 + 裸指针无界检查扫描」。random 1M 仅 -3.4%（56.4→54.5ms），
+/// 但 reverse/sorted 劣化 25~54%（总分 -9%）。诊断结论：random 大输入的 6 倍差距
+/// 的真瓶颈是**分支预测失败**（数据依赖扫描 ~50% mispredict ≈ 8 周期/次比较），
+/// 不是边界检查或 pivot 跟踪 —— 下一步应对准「无分支分区」，别再碰指针化。
 fn hoare_partition<T: Ord>(arr: &mut [T]) -> usize {
     let hi = arr.len() - 1;
     let mut i = 1usize; // a[0] <= pivot，左扫描从 1 开始（pivot 位天然挡住越界）
