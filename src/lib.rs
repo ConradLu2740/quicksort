@@ -5,7 +5,7 @@
 
 pub mod inputs;
 
-// GENERATION: 9 —— 双分区 + 下降沿密度信号：branchless Lomuto（random 专家）+ Hoare（逆序专家）
+// GENERATION: 9→10 —— 双分区 + 三档下降沿密度信号：branchless Lomuto（无结构数据）× Hoare（有结构数据）
 //
 // 演进脉络：
 // - Gen 6：默认 Hoare + 坏分区升级 DNF（pdqsort 分区策略）
@@ -14,18 +14,19 @@ pub mod inputs;
 // - Gen 9：分支免费版 Lomuto（无条件 swap + cmov 条件自增）拿下 random
 //   （1M 54.5→21.9ms，2.4 倍）；但 Lomuto 左区按扫描顺序搬运小于元素，
 //   逆序输入下左区为逆序、partial insertion 接不住（1.47 vs Hoare 0.30 n log n）
-// - 解法：partial insertion 的 bail 位置免费充当「逆序密度」信号
-//   （前 10 位攒够 9 个下降沿 → 走 Hoare；random 误触率 ~1%）
+// - Gen 10：信号从两档扩到三档 —— bail_pos ≤ 10（逆序密度）或 ≥ 48（下降沿极
+//   稀疏 = 近乎有序）都走 Hoare；中间密度（random ~17、few-unique ~22、
+//   organ-pipe ~n/2+9）走 Lomuto。nearly-sorted 10k 恢复 -51%（0.0765→0.0376ms）
 //
-// 结果：总分中位 0.604x（三轮 0.611/0.547/0.604，此前 ~0.52），全线无牺牲：
-// random 2.4~3.3 倍、few-unique 历史最佳 0.81~1.06x、reverse 完整恢复。
+// 结果：Gen 9 总分中位 0.604x（random 2.4~3.3 倍、few-unique 历史最佳）；
+// Gen 10 总分中位 0.586x（噪声带内持平），但 nearly-sorted 绝对耗时 -51%。
 //
 // 实现要点（不变式，改动时勿破坏）：
 // 1. 两分区统一输出「切分点 k」：arr[..k] 与 arr[k..] 两侧严格变小
 // 2. branchless Lomuto：pivot 值 ManuallyDrop 本地副本；每步无条件 swap(i,j)，
 //    `i += less as usize` cmov 化；!less 时 swap 交换两个都 >= pivot 的元素、无副作用
 // 3. 坏分区升级 DNF / partial insertion / 模式粉碎 / 深度预算 heapsort fallback
-//    全部保留；Hoare 仅作逆序数据专用路径
+//    全部保留；Hoare 是有结构数据的专用路径（逆序→左区有序；近有序→扫描提前收工）
 
 /// 小分区 cutoff：len <= 此值的子区间改用插入排序，不再分区递归。
 /// 参数扫描记录（Gen 7，各跑 3 轮取中位，23 case 几何平均）：
@@ -46,6 +47,12 @@ const PARTIAL_INSERTION_LIMIT: usize = 8;
 /// 逆序数据第 9 个位置即攒够 9 个下降沿（密度 100%）；random 要约 17+，
 /// 误触率约 1%（P(前 10 位内出现 9+ 下降沿, p=0.5) ≈ 1.1%）。
 const DESCENDING_DENSE_BAIL: usize = 10;
+
+/// 稀疏下降沿信号阈值：bail 位置 >= 此值 → 判定近乎有序（nearly-sorted 的
+/// 1% 扰动密度下第 9 个下降沿约在 ~900 位；random ~17±5，P(>=48) ≈ 1.5% 误触）。
+/// 近乎有序数据 Hoare 扫描大幅提前收工（Gen 6 实测 nearly-sorted 10k 1.598x，
+/// Lomuto 只有 0.736x）—— 即「稀疏」也走 Hoare。
+const SPARSE_DESCENT_BAIL: usize = 48;
 
 /// 分区失衡阈值：任一侧 < len/8 视为坏分区。
 const UNBALANCED_DIV: usize = 8;
@@ -302,12 +309,16 @@ fn quicksort_rec<T: Ord>(mut arr: &mut [T], mut depth_budget: usize) {
         depth_budget -= 1;
 
         median_of_3_sort(&mut arr);
-        // 分区策略选择（Gen 9）：
-        // - bail_pos 很小（前 10 位 9+ 下降沿）= 逆序密度 → Hoare：
-        //   其双向交换的分区副产品是「左区有序」，partial insertion 免费接住
-        // - 否则 → branchless Lomuto：消除扫描分支 mispredict，random 快 2.5 倍+
+        // 分区策略选择（Gen 9-10，三档下降沿密度信号）：
+        // - bail_pos <= 10：逆序密度（前 10 位 9+ 下降沿）→ Hoare：
+        //   双向交换的分区副产品是「左区有序」，partial insertion 免费接住
+        // - bail_pos >= 48：近乎有序（下降沿极稀疏）→ Hoare：
+        //   扫描提前收工，nearly-sorted 10k 实测 1.598x vs Lomuto 0.736x
+        // - 中间密度（random ~17、few-unique ~22、organ-pipe ~17）→ branchless Lomuto：
+        //   消除扫描分支 mispredict，random 快 2.4 倍+
+        // 原理：Hoare 吃有结构的数据，Lomuto 吃无结构数据。
         // 两条路径统一到切分点 k：arr[..k] 与 arr[k..] 两侧。
-        let k = if bail_pos <= DESCENDING_DENSE_BAIL {
+        let k = if bail_pos <= DESCENDING_DENSE_BAIL || bail_pos >= SPARSE_DESCENT_BAIL {
             hoare_partition(&mut arr)
         } else {
             branchless_partition(&mut arr)

@@ -9,8 +9,8 @@
 
 ## 当前状态
 
-- 世代：**Gen 9**
-- EVOLUTION SPEED SCORE：**0.604114x**（三轮中位：0.611 / 0.547 / 0.604；此前 ~0.52，+16%）
+- 世代：**Gen 10**
+- EVOLUTION SPEED SCORE：**~0.59x**（四轮中位 0.554/0.599/0.573/0.620；与 Gen 9 噪声带内持平，但 nearly-sorted 绝对耗时 -51%）
 - 正确性：7 个测试全绿
 
 ## 分数历史
@@ -25,8 +25,9 @@
 | Gen 5 | 0.494956x | pdqsort 三件套（DNF + partial insertion + 模式粉碎，+54%） | 2026-09-30 |
 | Gen 6 | 0.514827x | 混合分区：默认 Hoare + 坏分区升级 DNF（+4%） | 2026-09-30 |
 | Gen 7 | ~0.51x（持平） | 负结果代：等值计数升级 + CUTOFF 扫描，双双数据否决 | 2026-09-30 |
-| Gen 8 | ~0.51x（持平） | 负结果代：Hoare 指针化否决（-9%），但定位到真瓶颈=分支预测 | 2026-09-30 |
-| Gen 9 | 0.604114x | 双分区 + 下降沿信号：branchless Lomuto + Hoare（+16%） | 2026-09-30 |
+| Gen 8 | ~0.51x（持平） | 负结果代：Hoare 指针化否决（-9%），定位真瓶颈=分支预测 | 2026-09-30 |
+| Gen 9 | 0.604114x | 双分区 + 下降沿信号：branchless Lomuto × Hoare（+16%） | 2026-09-30 |
+| Gen 10 | ~0.59x（持平） | 信号扩三档：稀疏下降沿也走 Hoare，nearly-sorted 绝对耗时 -51% | 2026-09-30 |
 
 ## Gen 0：教科书朴素版（基线）
 
@@ -373,6 +374,34 @@
 5. 误触率实测符合模型：random 走 Lomuto（bail_pos ~17+），reverse 走 Hoare（bail_pos=9）
 
 **下一步方向**：（a）nearly-sorted 10k 的 Lomuto 交换流量问题——条件存储版 branchless（cmov 值而非无条件 swap）；（b）organ-pipe（0.214x）的新 worst case；（c）random 与 pdqsort 仍有 2.4 倍差距（21.9 vs 8.9ms），下一步可试 Ninther pivot 与块预取。
+
+## Gen 10：信号扩三档（稀疏下降沿也走 Hoare）
+
+**改动**：Gen 9 的两档信号（bail_pos ≤ 10 → Hoare）扩展为三档：新增 `bail_pos ≥ 48`（下降沿极稀疏 = 近乎有序）→ Hoare。逻辑：Hoare 吃有结构的数据（逆序→左区有序、近有序→扫描提前收工），Lomuto 吃无结构数据；random ~17、few-unique ~22、organ-pipe ~n/2+9 落在中间档继续走 Lomuto。
+
+**动机**：Gen 9 的 nearly-sorted 10k 因 bail_pos ≈ 900（稀疏档未定义）被路由到 Lomuto，付全量交换流量回退到 0.736x；Gen 6 的 Hoare 实测 1.598x。
+
+**基准数据（absolute，ms）**：
+
+| case | Gen 9 ours | Gen 10 ours | speedup(Gen10) |
+|---|---|---|---|
+| nearly-sorted 100 | 0.0001 | 0.0001 | 1.788x |
+| nearly-sorted 1k | 0.0025 | 0.0020 | 2.029x |
+| nearly-sorted 10k | 0.0765 | 0.0376 | 1.527x |
+| random 1M | 22.70 | 22.82 | 0.394x |
+| random 10k | 0.1126 | 0.1070 | 0.445x |
+| organ-pipe 1k | 0.0118 | 0.0102 | 0.406x |
+
+**EVOLUTION SPEED SCORE：四轮 0.554/0.599/0.573/0.620，中位 0.586x（Gen 9 中位 0.604，噪声带内持平）**
+
+**结论**：
+
+1. **nearly-sorted 结构性恢复**：10k 绝对耗时 -51%（0.0765→0.0376ms，speedup 0.736→1.527x），1k -20%（2.03x）——bail_pos≈900 稳定落入稀疏档
+2. random 无损（bail_pos ~17 稳居中档）；organ-pipe 小规模上涨（bail_pos ≈ n/2+9 也入稀疏档走 Hoare）
+3. 总分未过噪声门槛，但按 Gen 2 确立的「跨代比对我们自己的绝对耗时」原则，这是确定性收益：目标 case 的真实耗时砍半
+4. 测量噪声结论再确认：±5-6% 的运行间抖动主要由 pdqsort 侧亚 10µs 读数贡献，几何平均对单 case 结构改进的分辨率不足——判定改进以 absolute time 为准
+
+**下一步方向**：（a）organ-pipe（当前 worst 0.19~0.41x，高方差）——bail_pos≈n/2+9 的晚期密集模式值得专项（三分区本就该处理它，问题在 3-sort 选了 min 作 pivot）；（b）random 与 pdqsort 的 2.4 倍残余差距（Hoare 式交换效率 × 无分支扫描的合流，即 BlockQuicksort 方向）；（c）Ninther pivot。
 
 ## 死路记录
 
