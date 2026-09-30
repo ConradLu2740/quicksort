@@ -46,7 +46,7 @@
 
 ## 当前状态
 
-- 世代：**Gen 44**
+- 世代：**Gen 45**
 - EVOLUTION SPEED SCORE：**~0.89x（热相位 gauge 10.35，不可跨相位比）；鲁棒性 +142 倍，canary 持平**
 - 正确性：双 profile 全绿——debug 10 套件 / release 11 套件（含 200k mega stress）
 
@@ -99,6 +99,7 @@
 | Gen 42 | ~0.97x（冷） | two-run informational 测量（0.41x，与 random 同根的弱项记录在案）；会话转冷，测量窗口重开 | 2026-10-01 |
 | Gen 43 | 持平（负结果） | 规模自适应 CUTOFF 零收益回退（1M 收益来自中间节点非大切片，机制不可开关捕获）；CUTOFF=32 三重确认 | 2026-10-01 |
 | Gen 44 | —（审计代） | 疑似回归审计虚警：冷相位有子档，gauge 差 0.7% 时我们漂 12% std 漂 0.7%；同 session A/B 是唯一完全可靠的比较 | 2026-10-01 |
+| Gen 45 | 持平（负结果） | 块化 Lomuto +33% 回退：大数组瓶颈是内存带宽不是交换 ALU，两遍遍历淹没收益；修正 swap-count 假设 | 2026-10-01 |
 
 ## Gen 0：教科书朴素版（基线）
 
@@ -1118,6 +1119,16 @@ assert!(v.windows(2).all(|w| w[0] <= w[1]));
 **方法论沉淀**：gauge 有盲区——**不同冷子档位之间仍不可比；只有同 session A/B 完全可靠**。跨代读数成立条件 = gauge 同档 × 有机会时同 session A/B。本次无代码改动（当前二进制即 HEAD，two-run 修复保留）。
 
 **EVOLUTION SPEED SCORE：无代码改动；疑似回归排除**
+
+## Gen 45：负结果（块化 Lomuto：交换减半的诱惑 vs 内存两遍的代价）
+
+**想法**（Gen 26 笔记里被错过的方向）：块内分支less 记录「小于」元素的偏移，交换循环只动小于者——random 上每层交换 n→n/2 且每块只付 1 次 mispredict。正确性已推导（写游标不变量）。
+
+**实测**：正确性全绿（差分门禁通过实现），但 random 1M **20.7~20.9 vs 基线 15.6~15.8ms（+33%）**，回退。
+
+**机制（本次真正的产出）**：块化 Lomuto 必须**每块扫两遍**（先记偏移、再交换），而大数组的瓶颈是**内存带宽**不是交换 ALU——每层多一遍全量遍历（4MB × 2）的代价远超交换减半的收益。修正了「swap count 是 random 大输入主瓶颈」的隐含假设：单遍融合（compare+swap 一体）才是 memory-bound  regime 下的正解， BlockQuicksort 的 offset 机制之所以有效是因为它换掉了**比较**（mispredict-bound）而非交换，且其两遍也在同一缓存行内完成。
+
+**EVOLUTION SPEED SCORE：回退后 15.57ms（gauge 冷相位）；块化方向关闭**
 
 ## 死路记录
 
