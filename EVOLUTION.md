@@ -10,10 +10,9 @@
 
 ## 当前状态
 
-
-- 世代：**Gen 31**
-- EVOLUTION SPEED SCORE：**本代为判分器升级（gauge），分数不可比（热相位 gauge 10.34）**
-- 正确性：10 个测试全绿（3 lib 单测 + 1 比较次数回归 + 6 差分）
+- 世代：**Gen 32**
+- EVOLUTION SPEED SCORE：**本代为门禁加固代，无分数结论（热相位 gauge 10.33）**
+- 正确性：双 profile 全绿——debug 10 套件 / release 11 套件（含 200k mega stress）
 
 ## 分数历史
 
@@ -51,6 +50,7 @@
 | Gen 29 | ~1.03x（持平） | 负结果：二分插入排序实测 +72~230%，回退 | 2026-10-01 |
 | Gen 30 | ~1.02x | 路由参数面收官（UNBALANCED_DIV/SPARSE/LIMIT 全确认）+ 差分门禁扩容至 6 测试 | 2026-10-01 |
 | Gen 31 | —（判分器代） | 相位 gauge 后置落地；harness 污染实验：前置负载 +17% 污染被测 case（金丝雀纪律沉淀） | 2026-10-01 |
+| Gen 32 | —（门禁代） | 双 profile 验证制度化 + release 百万级 stress（200k×5 模式，cfg 反选零成本） | 2026-10-01 |
 
 ## 分数历史
 
@@ -953,7 +953,19 @@ assert!(v.windows(2).all(|w| w[0] <= w[1]));
 **结论**：**bench 的任何前置负载都会通过分配器/缓存/对齐污染被测 case（我们的热循环对此高度敏感）**——沉淀为 harness 修改纪律：改 bench 后必须用「我们的绝对耗时金丝雀」验证 bench 自身，而非只看分数。gauge 后置版工作正常（本会话热相位 10.34~10.46 被正确标注，0.900 分不再被误读为回退）。
 
 **EVOLUTION SPEED SCORE：方法论资产（不可比——本轮为热相位，gauge 10.34）**
+## Gen 32：门禁加固——双 profile 验证制度化 + release 百万级 stress
 
+**背景**：排序主体含大量 unsafe（ptr::read/swap/copy、ManuallyDrop、裸指针扫描），而 `cargo test` 默认只跑 debug——优化器在 release 下会改变指针路径代码生成，**某些 unsafe bug 只在优化后显现**，此前的门禁有覆盖缺口。
+
+**落地**：
+1. `release_only_mega_stress`（`#[cfg(not(debug_assertions))]`）：200k 元素 × 5 模式（随机/7 值重复/有序/逆序/2% 扰动）vs std 差分——release 下 20k 只要 0.02s，大规模 stress 零成本；cfg 反选使默认 debug 门禁不增加耗时（0.30s 不变）
+2. **协议制度化**：今后每一代的验证命令为 `cargo test && cargo test --release`（debug 快 + release 覆盖优化代码gen）
+
+**验证结果**：debug 6 差分（mega 跳过）/ release 7 差分（含 mega，0.02s）全绿；排序主体 unsafe 路径在优化下干净。
+
+**EVOLUTION SPEED SCORE：本代为门禁加固代，无分数结论（会话热相位 gauge ~10.33，与冷相位不可比）**
+
+## 死路记录
 ## 死路记录
 
 | 方案 | 结论 | 原因 |

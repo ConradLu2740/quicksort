@@ -144,3 +144,36 @@ fn two_sorted_runs_small() {
     let data: Vec<u32> = (0..half as u32).chain(0..half as u32).collect();
     check(&data);
 }
+
+/// 仅 release 模式运行的百万级 stress（Gen 32）：unsafe 指针路径在优化后
+/// 代码生成不同，debug 门禁不够；release 下 20k 只要 0.02s，故把大规模
+/// 差分放到这里跑，默认 debug 门禁零成本（cfg 反选跳过）。
+#[test]
+#[cfg(not(debug_assertions))]
+fn release_only_mega_stress() {
+    let mut rng = Rng::new(0x4E5A_6A5E);
+    let patterns: [&dyn Fn(usize, &mut Rng) -> Vec<u32>; 5] = [
+        &|n, rng| (0..n).map(|_| rng.next_u32()).collect(),
+        &|n, rng| (0..n).map(|_| rng.next_u32() % 7).collect(),
+        &|n, _| (0..n as u32).collect(),
+        &|n, _| (0..n as u32).rev().collect(),
+        &|n, rng| {
+            let mut v: Vec<u32> = (0..n as u32).collect();
+            for _ in 0..n / 50 {
+                let i = (rng.next_u64() as usize) % n;
+                let j = (rng.next_u64() as usize) % n;
+                v.swap(i, j);
+            }
+            v
+        },
+    ];
+    for (idx, pat) in patterns.iter().enumerate() {
+        let n = 200_000usize;
+        let data = pat(n, &mut rng);
+        let mut ours = data.clone();
+        let mut theirs = data.clone();
+        quicksort(&mut ours);
+        theirs.sort_unstable();
+        assert_eq!(ours, theirs, "mega stress pattern #{idx} mismatch");
+    }
+}
