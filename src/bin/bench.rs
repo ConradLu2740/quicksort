@@ -125,6 +125,22 @@ fn run() {
     };
     println!("phase gauge (std 1M random): {gauge:.3} ms —— 跨代比较请对 gauge（~8.8 = 冷相, ~10.3 = 热相）");
 
+    // 附加信息测量（Gen 42，不计入 23 case 分数——保持分数序列跨代可比）：
+    // two-run 分布（[升序 run | 升序 run]，合并有序流的真实类）——
+    // Gen 22 发现的二次方陷阱、Gen 39 修复（259ms→1.82ms@100k）后的性能水位。
+    {
+        let half = 50_000u32;
+        let data: Vec<u32> = (0..half).chain(0..half).collect();
+        let (ours_ms, ok1) = batch_time(&data, 5, true);
+        let (std_ms, _ok2) = batch_time(&data, 5, false);
+        all_ok &= ok1;
+        println!(
+            "info two-run  n={:>7} ours(ms)={ours_ms:>10.4} pdqsort(ms)={std_ms:>10.4} speedup={:.3}x",
+            data.len(),
+            std_ms / ours_ms
+        );
+    }
+
     if !all_ok {
         eprintln!("CORRECTNESS GATE FAILED: produced an unsorted array!");
         std::process::exit(1);
