@@ -148,20 +148,60 @@ fn sift_down<T: Ord>(arr: &mut [T], mut root: usize, end: usize) {
     }
 }
 
-/// median-of-three：三比较把首/中/尾排成 a[0] <= a[mid] <= a[hi]。
+/// median-of-three：三比较把三个位置排成 a[i] <= a[j] <= a[k]（排序网络，免 Clone）。
+fn sort3<T: Ord>(arr: &mut [T], i: usize, j: usize, k: usize) {
+    if arr[j] < arr[i] {
+        arr.swap(i, j);
+    }
+    if arr[k] < arr[i] {
+        arr.swap(i, k);
+    }
+    if arr[k] < arr[j] {
+        arr.swap(j, k);
+    }
+}
+
+/// median_of_3_sort：三比较把首/中/尾排成 a[0] <= a[mid] <= a[hi]。
+/// Hoare 分区专用（其哨兵不变量要求 pivot 在 mid且两端有序）。
 fn median_of_3_sort<T: Ord>(arr: &mut [T]) {
     let len = arr.len();
-    let hi = len - 1;
-    let mid = hi / 2;
-    if arr[mid] < arr[0] {
-        arr.swap(0, mid);
+    sort3(arr, 0, (len - 1) / 2, len - 1);
+}
+
+/// Ninther 阈值：len >= 此值用九采样中位的的中位，否则中位三。
+/// 盈亏点实测模型：ninther 省 ~13% 比较/交换（m·log2(m)·0.16），成本 ~20 比较，
+/// m=32 附近回本，取 64 留余量。
+const NINTHER_MIN: usize = 64;
+
+/// 为 branchless Lomuto 选 pivot：len < 64 中位三；否则 Tukey ninther
+/// （3 组三采样各取中位，再对 3 个中位取中位）。pivot 值放到 mid 位。
+/// ninther 把 pivot 秩次方差再压一档：random 1.26 → ~1.10 n log n
+///（比较与交换次数同降 ~13%）。
+fn lomuto_pivot<T: Ord>(arr: &mut [T]) {
+    let len = arr.len();
+    let mid = (len - 1) / 2;
+    if len < NINTHER_MIN {
+        median_of_3_sort(arr);
+        return;
     }
-    if arr[hi] < arr[0] {
-        arr.swap(0, hi);
-    }
-    if arr[hi] < arr[mid] {
-        arr.swap(mid, hi);
-    }
+    let step = len / 8;
+    let i0 = 0;
+    let i1 = step;
+    let i2 = 2 * step;
+    let i3 = 3 * step;
+    let i4 = 4 * step; // ≈ len/2
+    let i5 = 5 * step;
+    let i6 = 6 * step;
+    let i7 = 7 * step;
+    let i8 = len - 1;
+    // 三组三采样，各组中位落到中间位（i1 / i4 / i7）
+    sort3(arr, i0, i1, i2);
+    sort3(arr, i3, i4, i5);
+    sort3(arr, i6, i7, i8);
+    // 三个中位取中位 → 落到 i4（九采样中位，Tukey ninther）
+    sort3(arr, i1, i4, i7);
+    // 钉到 branchless_partition 读取的 mid 位
+    arr.swap(mid, i4);
 }
 
 /// Hoare 分区（pivot 位置跟踪，免 Clone）。调用方须先做 median_of_3_sort。
@@ -342,19 +382,20 @@ fn quicksort_rec<T: Ord>(mut arr: &mut [T], mut depth_budget: usize) {
         };
         depth_budget -= 1;
 
-        median_of_3_sort(&mut arr);
         // 分区策略选择（Gen 9-10，三档下降沿密度信号）：
         // - bail_pos <= 10：逆序密度（前 10 位 9+ 下降沿）→ Hoare：
         //   双向交换的分区副产品是「左区有序」，partial insertion 免费接住
         // - bail_pos >= 48：近乎有序（下降沿极稀疏）→ Hoare：
         //   扫描提前收工，nearly-sorted 10k 实测 1.598x vs Lomuto 0.736x
-        // - 中间密度（random ~17、few-unique ~22、organ-pipe ~17）→ branchless Lomuto：
+        // - 中间密度（random ~17、few-unique ~22、organ-pipe ~n/2+9）→ branchless Lomuto：
         //   消除扫描分支 mispredict，random 快 2.4 倍+
         // 原理：Hoare 吃有结构的数据，Lomuto 吃无结构数据。
         // 两条路径统一到切分点 k：arr[..k] 与 arr[k..] 两侧。
         let k = if bail_pos <= DESCENDING_DENSE_BAIL || bail_pos >= SPARSE_DESCENT_BAIL {
+            median_of_3_sort(&mut arr); // Hoare 的哨兵不变量要求三位置有序
             hoare_partition(&mut arr)
         } else {
+            lomuto_pivot(&mut arr); // Gen 13：ninther（len>=64）/ 中位三
             branchless_partition(&mut arr)
         };
         let left_len = k;
