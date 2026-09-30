@@ -5,21 +5,23 @@
 
 pub mod inputs;
 
-// GENERATION: 1 —— Hoare 双指针分区 + 中间元素 pivot（位置跟踪法，无需 Clone）
+// GENERATION: 2 —— Hoare 分区 + median-of-three pivot
 //
-// 相对 Gen 0 的改进动机：
-// - Lomuto 每进一个 <= pivot 的元素就交换一次；Hoare 从两端向中间成对交换，
-//   交换次数约为 Lomuto 的一半（random 输入预期 0.2x → 0.4~0.6x）
-// - 全等输入下 Lomuto 每次只剥掉 1 个元素（O(n²)）；
-//   Hoare 在全等时 i/j 在中间相遇、直接对半劈（O(n log n)）
+// 相对 Gen 1 的改进动机：
+// - 单取中间元素，pivot 秩次方差大；首/中/尾取中位数后，
+//   random 输入比较次数从 ~1.39·n·log n 降至 ~1.19·n·log n（期望 ~15%）
+// - len <= 3 时「三元素排序」本身就是完全排序，直接返回
+//   （小分区提前收手的雏形，为 Gen 3 插入排序 cutoff 铺路）
+//
+// 已知的、本代不解决的病灶（诚实记录）：
+// - organ-pipe（风琴形）：首/中/尾 = (1, max, 1)，中位数 = 1 = 最小值，
+//   pivot 恒取极小值 → 仍 O(n²)。median-of-three 对静态构型杀手无效，
+//   真正的防线是 Gen 4 深限 fallback / Gen 6 模式识别
 //
 // 实现要点（不变式，改动时勿破坏）：
-// 1. pivot 取索引 p = (len-1)/2，永远不是末位 —— 这是递归必然收缩的前提
-// 2. 每次 swap 若碰到 pivot 所在位置，p 跟随移动到新位置，
-//    保证不变式 a[p] 始终等于初始 pivot 值 —— Hoare 扫描由此不会越界：
-//    左扫描必停于首个 >= pivot 处（最迟停在 pivot 位），右扫描必停于首个 <= pivot 处
-// 3. 分区边界返回 j：arr[..=j] 全部 <= arr[j+1..] 全部，且 j <= len-2，
-//    两侧都必然严格变小，递归终止
+// 1. 三元素排序后 a[0] <= a[mid] <= a[hi]，pivot 值 = a[mid]，pivot 位置 p = mid 恒非末位
+// 2. swap 碰到 pivot 位时 p 跟随移动，a[p] 恒为 pivot 值 —— Hoare 扫描不会越界
+// 3. 分区边界 j 满足 arr[..=j] <= arr[j+1..] 且 j <= len-2，两侧严格变小
 
 /// 原地快速排序（升序）。
 pub fn quicksort<T: Ord>(arr: &mut [T]) {
@@ -33,10 +35,26 @@ fn quicksort_rec<T: Ord>(arr: &mut [T]) {
     if len <= 1 {
         return;
     }
+    let hi = len - 1;
+    let mid = hi / 2;
 
-    let mut i = 0usize;
-    let mut j = len - 1;
-    let mut p = (len - 1) / 2; // pivot 位置；不变量：a[p] 恒等于初始 pivot 值
+    // median-of-three：三个比较把首/中/尾排成 a[0] <= a[mid] <= a[hi]
+    if arr[mid] < arr[0] {
+        arr.swap(0, mid);
+    }
+    if arr[hi] < arr[0] {
+        arr.swap(0, hi);
+    }
+    if arr[hi] < arr[mid] {
+        arr.swap(mid, hi);
+    }
+    if len <= 3 {
+        return; // 三个位置就是全部元素，已全序
+    }
+
+    let mut i = 1usize; // a[0] <= pivot，左扫描从 1 开始（pivot 位天然挡住越界）
+    let mut j = hi - 1; // a[hi] >= pivot，右扫描从 hi-1 开始
+    let mut p = mid;
 
     loop {
         while arr[i] < arr[p] {
@@ -49,7 +67,7 @@ fn quicksort_rec<T: Ord>(arr: &mut [T]) {
             break;
         }
         arr.swap(i, j);
-        // pivot 跟随交换移动，维持 a[p] 为初始 pivot 值
+        // pivot 跟随交换移动，维持 a[p] 为 pivot 值
         if p == i {
             p = j;
         } else if p == j {
