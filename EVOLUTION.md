@@ -11,7 +11,7 @@
 
 ## 当前状态
 
-- 世代：**Gen 35**
+- 世代：**Gen 36**
 - EVOLUTION SPEED SCORE：**无分数结论（热相位 gauge ~10.38；本代为文档审计）**
 - 正确性：双 profile 全绿——debug 10 套件 / release 11 套件（含 200k mega stress）
 
@@ -55,6 +55,7 @@
 | Gen 33 | —（hygiene 代） | clippy 两处修正（int_plus_one、nonminimal_bool），canary +1% 噪声内，双门禁绿 | 2026-10-01 |
 | Gen 34 | —（门禁代） | mega stress 补 organ-pipe 200k（最深自适应路径，深度 ~40 贴预算 51）+ all-equal，7 模式全绿 | 2026-10-01 |
 | Gen 35 | —（文档代） | EVOLUTION.md 一致性审计：清 32 行过期重复表 + 规则阈值漂移修正，35/35 代一一对应 | 2026-10-01 |
+| Gen 36 | —（API 代） | 公共 API 文档补全（复杂度契约/行为说明）+ clippy 重借用抛光清零，金丝雀平稳 | 2026-10-01 |
 
 ## Gen 0：教科书朴素版（基线）
 
@@ -972,9 +973,19 @@ assert!(v.windows(2).all(|w| w[0] <= w[1]));
 
 **验证**：审计后 35/35 代一一对应；双 profile 门禁绿（5 套件 each）；文档从 1004 行收敛到 976 行。
 
-## 死路记录
 
 | 方案 | 结论 | 原因 |
+## Gen 36：公共 API 文档补全 + clippy 重借用抛光（金丝雀平稳）
+
+**公共 API 文档**：`quicksort` 的 doc 从一行扩展到完整契约——复杂度（期望/最坏 O(n log n) 及依据、O(1) 空间）、行为说明（不稳定、自适应快速路径、正确性门禁指向）。这是库的公共门面，此前只有一行。
+
+**clippy 重借用抛光**：5 处 `&mut arr` → 规范的 `&mut *arr` 显式重借用（循环内绑定不可移动，clippy 建议的裸 `arr` 会编译错误）。needless_borrow 警告清零；剩余 6 个警告均为 doc 格式类，无功能影响。
+
+**金丝雀验证**（热相位内自比）：random 1M 15.74~16.37 → 15.84~16.32ms（噪声内持平）；双 profile 门禁绿（5 套件 each）。
+
+**EVOLUTION SPEED SCORE：无分数结论（热相位 gauge ~10.33；本代为 API/ lint 资产代）**
+
+## 死路记录
 |---|---|---|
 | DNF 单独使用（无 partial insertion / 模式粉碎） | 死路，总分 -37% | sorted 输入自相似退火链，6.38 n log n，墙钟 21 倍回退 |
 | blind partial insertion（单段边扫边插） | 死路 | nearly-sorted/organ-pipe 的大位移插入陷井，三 regime 全面回退 |

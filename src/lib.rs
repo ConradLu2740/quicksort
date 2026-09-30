@@ -170,7 +170,21 @@ const SPARSE_DESCENT_BAIL: usize = 48;
 /// 分区失衡阈值：任一侧 < len/8 视为坏分区。
 const UNBALANCED_DIV: usize = 8;
 
-/// 原地快速排序（升序）。
+/// 原地快速排序（升序，不稳定，零分配）。
+///
+/// # 复杂度
+/// - 期望时间 O(n log n)（各输入分布的实测见仓库根目录 EVOLUTION.md：
+///   23 个基准用例的几何平均约为标准库 pdqsort 的 1.0~1.03 倍）
+/// - 最坏时间 O(n log n)：深度预算 3·log2(n) 耗尽时该切片 fallback 堆排序
+///   （introsort 式保证），栈深结构性 <= log2(n)（小侧递归）
+/// - 空间 O(1) 额外（原地，无分配）
+///
+/// # 行为说明
+/// - 不稳定：相等元素的相对顺序不保持（快速排序族的固有属性）
+/// - 自适应：近乎有序 / 逆序 / 海量重复等分布有专用快速路径（见
+///   EVOLUTION.md 的 Gen 5~25 机制史）
+/// - 正确性门禁：tests/ 下差分测试（vs `slice::sort_unstable`），
+///   含 20k 规模全分布与 release-only 200k 七模式 stress
 pub fn quicksort<T: Ord>(arr: &mut [T]) {
     if arr.len() > 1 {
         // 深度预算：3*log2(n)。正常输入 balanced 分割只用 log2(n)，永远碰不到；
@@ -530,8 +544,8 @@ fn quicksort_rec<T: Ord>(mut arr: &mut [T], mut depth_budget: usize) {
         // 纯属浪费；organ-pipe 等距采样 desc=4 也落此档，目的地与 Gen 24 一致）。
         let k = if len >= 128 && route_direct_lomuto(arr) {
             depth_budget -= 1;
-            lomuto_pivot(&mut arr); // Gen 13：ninther（len>=64）/ 中位三
-            branchless_partition(&mut arr)
+            lomuto_pivot(&mut *arr); // Gen 13：ninther（len>=64）/ 中位三
+            branchless_partition(&mut *arr)
         } else {
             // 平滑/逆序密度：走完整路径（partial insertion 的下降沿扫描 +
             // 近乎有序完成 + 三档路由 + 逆序检测 + 降序游程精化）
@@ -541,7 +555,7 @@ fn quicksort_rec<T: Ord>(mut arr: &mut [T], mut depth_budget: usize) {
             depth_budget -= 1;
             // 分区路由（Gen 24 起整体外描为 partition_router：三档信号 + 逆序检测
             // + 降序游程精化 + 分区器选择全在冷函数里，热循环只剩一次调用与匹配）
-            let Some(k) = partition_router(&mut arr, bail_pos) else {
+            let Some(k) = partition_router(&mut *arr, bail_pos) else {
                 return; // 整段逆序，已反转成升序
             };
             k
@@ -557,7 +571,7 @@ fn quicksort_rec<T: Ord>(mut arr: &mut [T], mut depth_budget: usize) {
             // 已实验并否决：分区后做「等值采样探测」（两侧各采 4 位，命中 >=2 即升级）。
             // 它能多抓住 few-unique 这类按值域均衡的重复数据（0.514 → 0.608），
             // 但 random 全线付出 ~10%（每节点 8 次额外比较），总分净负 ~4%，已回退。
-            let (lt, gt) = dnf_partition(&mut arr);
+            let (lt, gt) = dnf_partition(&mut *arr);
             let d_left = lt;
             let d_right = len - gt - 1;
             if d_left + d_right == 0 {
@@ -570,7 +584,7 @@ fn quicksort_rec<T: Ord>(mut arr: &mut [T], mut depth_budget: usize) {
                     scramble_patterns(&mut arr[..lt]);
                     scramble_patterns(&mut arr[gt + 1..]);
                 } else {
-                    break_patterns_sides(&mut arr, lt, gt);
+                    break_patterns_sides(&mut *arr, lt, gt);
                 }
             }
             if d_left < d_right {
