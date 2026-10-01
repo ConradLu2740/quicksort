@@ -1,11 +1,14 @@
 //! 基准测试台（判分器）。
 //!
-//! 对每个 (分布, 规模) 组合，比较我们的 quicksort 与标准库 `sort_unstable`（pdqsort）。
+//! 对每个 (分布, 规模) 组合，比较我们的 quicksort 与标准库 `sort_unstable`。
+//! 注意：Rust 1.81 起 `sort_unstable` 的内核已由 pdqsort 换成 **ipnsort**
+//! （1.96 工具链实测标签，早期日志里的「对标 pdqsort」标签随之过时——
+//! 新内核更快，所以同代码读数在 1.81 前后不可直接比）。
 //! 所有输入由 `sort::inputs` 固定 seed 生成，结果可复现。
 //!
 //! 用法：`cargo run --release --bin bench`
 //!
-//! 输出「EVOLUTION SPEED SCORE」= 各组合 speedup（pdqsort 耗时 / 我们耗时）的
+//! 输出「EVOLUTION SPEED SCORE」= 各组合 speedup（std 耗时 / 我们耗时）的
 //! 几何平均。这个分数就是进化曲线，越高越好。
 //!
 //! 计时方法：批量计时。单次排序在小 n 下低于计时器分辨率（Windows QPC ~100ns），
@@ -69,7 +72,7 @@ fn median(v: &mut [f64]) -> f64 {
 fn run() {
     println!(
         "{:<14} {:>9} {:>12} {:>12} {:>9}",
-        "distribution", "n", "ours(ms)", "pdqsort(ms)", "speedup"
+        "distribution", "n", "ours(ms)", "std(ms)", "speedup"
     );
     println!("{}", "-".repeat(60));
 
@@ -108,7 +111,7 @@ fn run() {
     let score = (log_sum / cases as f64).exp();
     println!("{}", "-".repeat(60));
     println!(
-        "EVOLUTION SPEED SCORE (geomean speedup vs pdqsort, {cases} cases): {score:.6}x"
+        "EVOLUTION SPEED SCORE (geomean speedup vs std sort_unstable (ipnsort), {cases} cases): {score:.6}x"
     );
     println!("worst case: {} ({:.3}x)", worst.0, worst.1);
 
@@ -135,7 +138,7 @@ fn run() {
         let (std_ms, _ok2) = batch_time(&data, 5, false);
         all_ok &= ok1;
         println!(
-            "info two-run  n={:>7} ours(ms)={ours_ms:>10.4} pdqsort(ms)={std_ms:>10.4} speedup={:.3}x",
+            "info two-run  n={:>7} ours(ms)={ours_ms:>10.4} std(ms)={std_ms:>10.4} speedup={:.3}x",
             data.len(),
             std_ms / ours_ms
         );

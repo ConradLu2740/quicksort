@@ -5,6 +5,10 @@
 //! 现固化为断言：任何世代不得让比较次数明显劣于 n log n 量级，
 //! 防止同类结构性退化在无墙钟信号时悄悄混入。
 
+// thread_local! 的 const 初始化器语法超前于当前 stable 工具链，
+// 刻意不用（测试间并行会共享计数），请勿按新版 clippy 提示「修复」。
+#![allow(clippy::missing_const_for_thread_local)]
+
 use std::cell::Cell;
 use std::cmp::Ordering;
 

@@ -1,7 +1,7 @@
 use sort::quicksort;
 use std::time::Instant;
 
-fn timeit(name: &str, v: &mut Vec<u32>) {
+fn timeit(name: &str, v: &mut [u32]) {
     let t = Instant::now();
     quicksort(v);
     let dt = t.elapsed();

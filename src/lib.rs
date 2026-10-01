@@ -13,7 +13,12 @@
 //! - Gen 13：ninther pivot（Lomuto 路径）
 //! - Gen 14/19/21：洞式插入 / 零下降沿直达完成 / 逆序检测直达
 //! - Gen 24-25：降序游程精化（organ-pipe）+ 粗糙预筛（跳过下降沿扫描）
+//! - Gen 49：洞式插入迁入 InsertHole drop guard —— cmp panic 时恢复
+//!   「每元素恰好存活一次」（第三方测评发现的 soundness blocker，
+//!   panic 路径上对 T: Drop 原是 double-free，详见 tests/panic_safety.rs）
 
+/// 判分器脚手架（分布生成器/PRNG）：仅供 bench 与测试使用，不是库 API。
+#[doc(hidden)]
 pub mod inputs;
 
 // GENERATION: 11 —— 退化分区强粉碎（scramble_patterns：分块轮换击败 organ-pipe 剥层链）
@@ -142,6 +147,7 @@ fn wants_hoare<T: Ord>(arr: &[T], bail_pos: usize) -> bool {
 /// - 逆序密度：先试整段逆序检测，失败走 Hoare（左区有序副产品）
 /// - 近乎有序：Hoare（扫描提前收工）；大块降序尾（organ-pipe）：Lomuto+ninther
 /// - 中间密度：branchless Lomuto（消除扫描分支 mispredict）
+///
 /// 原理：Hoare 吃有结构的数据，Lomuto 吃无结构数据；organ-pipe 是
 /// 「对称采样只能取到 min」的例外，必须换非对称 ninther 才能跳出剥层链。
 fn partition_router<T: Ord>(arr: &mut [T], bail_pos: usize) -> Option<usize> {
@@ -185,7 +191,7 @@ const UNBALANCED_DIV: usize = 8;
 ///
 /// # 复杂度
 /// - 期望时间 O(n log n)（各输入分布的实测见仓库根目录 EVOLUTION.md：
-///   23 个基准用例的几何平均约为标准库 pdqsort 的 1.0~1.03 倍）
+///   23 个基准用例的几何平均约为标准库 sort_unstable（ipnsort）的 1.0 倍上下）
 /// - 最坏时间 O(n log n)：深度预算 3·log2(n) 耗尽时该切片 fallback 堆排序
 ///   （introsort 式保证），栈深结构性 <= log2(n)（小侧递归）
 /// - 空间 O(1) 额外（原地，无分配）
@@ -196,6 +202,13 @@ const UNBALANCED_DIV: usize = 8;
 ///   EVOLUTION.md 的 Gen 5~25 机制史）
 /// - 正确性门禁：tests/ 下差分测试（vs `slice::sort_unstable`），
 ///   含 20k 规模全分布与 release-only 200k 七模式 stress
+///
+/// # 契约（与 std 同级）
+/// - `T: Ord` 必须是全序：cmp 自反、反对称、传递。非全序比较器
+///   （如 NaN 包装型）下哨兵逻辑可能失效，结果为 panic —— 不产生
+///   内存不安全（与 `slice::sort_unstable` 行为同级）。
+/// - 若 `cmp` panic：以 drop guard 保证数组仍恢复为合法排列（panic
+///   后每元素恰好存活一次，可安全 drop）；不再继续排序。
 pub fn quicksort<T: Ord>(arr: &mut [T]) {
     if arr.len() > 1 {
         // 深度预算：3*log2(n)。正常输入 balanced 分割只用 log2(n)，永远碰不到；
@@ -208,28 +221,80 @@ pub fn quicksort<T: Ord>(arr: &mut [T]) {
     }
 }
 
+/// 洞式插入的 Drop guard（Gen 49 S1 修复）：`saved` 是从洞位 ptr::read 取出
+/// 的值（ManuallyDrop，绝不主动 drop），guard 析构时把它写回当前洞位。
+///
+/// 为什么必须存在：洞式插入进行中被 shift 过的元素，其 ghost 副本仍留在
+/// 已腾空的槽位里；若用户的 `Ord::cmp` 在此时 panic，unwind 会照长度 drop
+/// 整个数组 —— 每个被 move 过的元素的 ghost 副本与 real 副本各被 drop
+/// 一次（对 `T: Drop` 即 double-free），而 saved 值泄漏零次。guard drop
+/// 在 panic 路径上把 saved 写回洞位、填上最后的 ghost 槽，恢复「数组每
+/// 元素恰好存活一次」不变量。正常路径上 guard drop 就是插入落位本身。
+struct InsertHole<'a, T: Ord> {
+    arr: &'a mut [T],
+    pos: usize,
+    saved: std::mem::ManuallyDrop<T>,
+}
+
+impl<'a, T: Ord> InsertHole<'a, T> {
+    /// SAFETY: `pos < arr.len()`；`arr[pos]` 的值被移入本地 `saved`，
+    /// 调用方须通过 `shift` 推进洞位或让 guard drop 落位。
+    unsafe fn new(arr: &'a mut [T], pos: usize) -> Self {
+        // SAFETY: pos < arr.len()
+        let saved = std::mem::ManuallyDrop::new(unsafe { std::ptr::read(arr.as_ptr().add(pos)) });
+        Self { arr, pos, saved }
+    }
+
+    /// 洞位前一个元素是否大于洞中待插值（`arr[pos-1] > saved`）。
+    fn should_shift(&self) -> bool {
+        debug_assert!(self.pos > 0);
+        // SAFETY: 调用方保证 pos > 0；saved 是洞中值，不会与 arr 槽位混淆
+        unsafe { *self.arr.as_ptr().add(self.pos - 1) > *self.saved }
+    }
+
+    /// 把 `arr[pos-1]` memmove 进洞位，洞位前移一格。
+    ///
+    /// SAFETY: `pos > 0`；等价于旧版 `ptr::copy(j-1, j); j -= 1`
+    unsafe fn shift(&mut self) {
+        let pos = self.pos;
+        // SAFETY: 调用方保证 pos > 0，pos < len
+        unsafe { std::ptr::copy(self.arr.as_ptr().add(pos - 1), self.arr.as_mut_ptr().add(pos), 1) }
+        self.pos -= 1;
+    }
+}
+
+impl<T: Ord> Drop for InsertHole<'_, T> {
+    fn drop(&mut self) {
+        // 正常路径：写入最终洞位 = 插入落位。panic 路径：恢复不变量。
+        // SAFETY: pos 始终在 [0, len) 内（构造时 pos = i < len，只递减不递增）
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                &*self.saved as *const T,
+                self.arr.as_mut_ptr().add(self.pos),
+                1,
+            );
+        }
+    }
+}
+
 /// 小分区收尾：洞式插入排序（Gen 14：移位从交换式的 3 次移动降为 1 次 memmove）。
 ///
-/// 做法：待插值 ptr::read 进 ManuallyDrop 洞位变量，比它大的元素逐一
-/// ptr::copy 右移（memmove），最后 ptr::write 落位。
+/// 做法：待插值 ptr::read 进 InsertHole 的 ManuallyDrop 变量，比它大的元素
+/// 逐一 ptr::copy 右移（memmove），guard 析构时 ptr::write 落位。
 ///
-/// SAFETY：读出的值由 ManuallyDrop 持有、绝不 drop（泛型 T 可能有 Drop），
-/// 全程索引不越界（j 递减有 j > 0 保护，落位点 j 必在洞位起点 0..=i 内）。
+/// SAFETY：读出的值由 guard 的 ManuallyDrop 持有、绝不主动 drop（泛型 T
+/// 可能有 Drop）；guard drop 时写回洞位，即使中途 panic（unwind）也恢复
+/// 「每元素恰好存活一次」——见 InsertHole 文档。
 fn insertion_sort<T: Ord>(arr: &mut [T]) {
-    let n = arr.len();
-    let base = arr.as_mut_ptr();
-    for i in 1..n {
-        // SAFETY: i < n；洞位变量见函数级注释
+    for i in 1..arr.len() {
+        // SAFETY: i >= 1；洞位由 guard 收尾
         unsafe {
-            if *base.add(i) < *base.add(i - 1) {
-                let saved: std::mem::ManuallyDrop<T> =
-                    std::mem::ManuallyDrop::new(std::ptr::read(base.add(i)));
-                let mut j = i;
-                while j > 0 && *base.add(j - 1) > *saved {
-                    std::ptr::copy(base.add(j - 1), base.add(j), 1);
-                    j -= 1;
+            if *arr.as_ptr().add(i) < *arr.as_ptr().add(i - 1) {
+                let mut hole = InsertHole::new(&mut *arr, i);
+                while hole.pos > 0 && hole.should_shift() {
+                    // SAFETY: should_shift 已确认 pos > 0
+                    hole.shift();
                 }
-                std::ptr::write(base.add(j), std::mem::ManuallyDrop::into_inner(saved));
             }
         }
     }
@@ -259,9 +324,10 @@ fn partial_insertion_sort<T: Ord>(arr: &mut [T]) -> Option<usize> {
     }
 }
 
-/// 带移位预算的洞式插入（Gen 22 存档，Gen 39 第三次布局窗口重试）：
+/// 带移位预算的洞式插入（Gen 22 存档，Gen 39 第三次布局窗口重试，
+/// Gen 49 迁移到 InsertHole guard 获得 panic 安全）：
 /// disorder <= LIMIT 时执行，全程数总移位，超过 budget 中途放弃
-/// （洞已填、前缀有序、无副作用，返回 Some(i) 走分区路径）。
+/// （guard drop 已把洞位填上、前缀有序、无副作用，返回 Some(i) 走分区路径）。
 ///
 /// 为什么必须数移位（Gen 22 修复的二次方陷阱）：「两段有序」输入
 /// （[升序 run | 升序 run]）只有 1 个下降沿但插入位移 O(n²/4)，
@@ -273,25 +339,20 @@ fn insertion_with_budget<T: Ord>(arr: &mut [T]) -> Option<usize> {
     let budget = arr.len() / 8 + 32;
     let mut shifts = 0usize;
     let n = arr.len();
-    let base = arr.as_mut_ptr();
     for i in 1..n {
-        // SAFETY: i < n；洞位变量在函数退出前必然 write 回洞位
+        // SAFETY: i >= 1；洞位由 guard 收尾（含 panic 路径）
         unsafe {
-            if *base.add(i) < *base.add(i - 1) {
-                let saved: std::mem::ManuallyDrop<T> =
-                    std::mem::ManuallyDrop::new(std::ptr::read(base.add(i)));
-                let mut j = i;
-                while j > 0 && *base.add(j - 1) > *saved {
-                    std::ptr::copy(base.add(j - 1), base.add(j), 1);
+            if *arr.as_ptr().add(i) < *arr.as_ptr().add(i - 1) {
+                let mut hole = InsertHole::new(&mut *arr, i);
+                while hole.pos > 0 && hole.should_shift() {
+                    // SAFETY: should_shift 已确认 pos > 0
+                    hole.shift();
                     shifts += 1;
-                    j -= 1;
                     if shifts > budget {
-                        // 填洞后放弃：数组仍为合法排列，落分区路径
-                        std::ptr::write(base.add(j), std::mem::ManuallyDrop::into_inner(saved));
+                        // 放弃：guard drop 回填洞位，数组仍是合法排列
                         return Some(i);
                     }
                 }
-                std::ptr::write(base.add(j), std::mem::ManuallyDrop::into_inner(saved));
             }
         }
     }
@@ -572,7 +633,7 @@ fn break_patterns_sides<T>(arr: &mut [T], lt: usize, gt: usize) {
     if lt >= 8 {
         break_patterns(&mut arr[..lt]);
     }
-    if arr.len() - gt > 8 {
+    if arr.len() - gt >= 8 {
         break_patterns(&mut arr[gt + 1..]);
     }
 }

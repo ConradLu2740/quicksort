@@ -13,4 +13,4 @@ path = "src/bin/bench.rs"
 opt-level = 3
 lto = true           # 跨 crate（lib+bench）内联，泛型单态化代码进热循环
 codegen-units = 1    # 单编译单元，优化器看得见全部调用图
-panic = "abort"      # 去掉 panic 着陆垫；bench 的正确性失败仍走 process::exit(1)
+panic = "abort"      # 去掉 panic 着陆垫；bench 的正确性失败仍走 process::exit(1)。M2 量化（Gen 49）：该设置对己方 +3.3% @1M / +4.9% 总分，std 不受影响——见 EVOLUTION.md Gen 49

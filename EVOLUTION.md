@@ -46,9 +46,10 @@
 
 ## 当前状态
 
-- 世代：**Gen 48**
-- EVOLUTION SPEED SCORE：**~0.89x（热相位 gauge 10.35，不可跨相位比）；鲁棒性 +142 倍，canary 持平**
-- 正确性：双 profile 全绿——debug 10 套件 / release 11 套件（含 200k mega stress）
+- 世代：**Gen 49**（第三方测评 → soundness 修复代）
+- EVOLUTION SPEED SCORE：**~0.97x（冷相位 gauge 8.88，交替 A/B 三轮 0.952~0.980；S1 修复零成本）**
+- 正确性：双 profile 全绿——debug 12 套件 / release 12 套件（含 200k mega stress、panic-safety ×2）
+- 工具链注记：rustc 1.96，std `sort_unstable` 内核 = **ipnsort**（1.81 起替换 pdqsort），bench 标签已更正
 
 ## 分数历史
 
@@ -103,8 +104,11 @@
 | Gen 46 | —（簿记代） | 分数表加防误读注记（gauge 8.86 vs 8.80 的冷子档漂移非性能回退）；双 profile + clippy 全量维护验证 | 2026-10-01 |
 | Gen 47 | —（审计代） | exotic 分布抽查（锯齿波/双层风琴/正弦/块shuffle）全部 ~11~15 ns/elem，矩阵外无隐藏病态；exotic 回归测试入库 | 2026-10-01 |
 | Gen 48 | 饱和判定 | 可识别优化空间穷尽（算法/参数/鲁棒/测量/文档五域全闭合），按「无有用下一动作」条款完成；修正 Gen 45 机制解释 | 2026-10-01 |
+| Gen 49 | 测评修复代 | 第三方测评发现 S1（panic 路径 double-drop，对 Drop 类型是 UB）→ InsertHole guard 修复，panic-safety 测试红→绿；M2 量化 panic=abort 偏差（+3.3%@1M/+4.9% 总分）保留并注明；clippy 1.96 新 lint 清零；bench 标签 pdqsort→ipnsort | 2026-10-01 |
 
 > **读表须知（Gen 46 补注）**：上表分数是「当次运行的 gauge 同档」下的快照。Gen 26 前后（gauge ~8.80 冷档）读数 ~1.02~1.03，Gen 42 之后机器基线漂移（gauge ~8.86 仍叫「冷」但实际更 warm，见 Gen 44），同代码读数降至 ~0.96~0.97。**这不是性能回退**（Gen 44 同 session A/B 已证），跨代比较必须对 gauge 且尽量同 session；判代码优劣的金标准是「我们自己的绝对耗时」的同 session 对比。
+>
+> **工具链分水岭（Gen 49 补注）**：Rust 1.81 起 std `sort_unstable` 内核由 pdqsort 换成 ipnsort（约 +1.2x）。上表 Gen 26 之前的读数是「对标 pdqsort」，Gen 49 之后（本仓库当时已升级到 1.96）是「对标 ipnsort」——**同代码在两侧的绝对读数不可比，1.81 后的读数含金量更高**。
 
 ## Gen 0：教科书朴素版（基线）
 
@@ -1174,6 +1178,60 @@ assert!(v.windows(2).all(|w| w[0] <= w[1]));
 **判定**：已无法识别任何期望收益为正的下一步动作（剩余候选均 <1% 预期且需付布局税）。按 goal 规则的「无有用下一动作」条款标记完成——这不是提前放弃，而是饱和。**最终形态**：与 pdqsort 打平/反超 21/23 case，random 100k/1M（~0.56x）为已知均衡点（机制叙事见 Gen 45 及修正注记），最坏时间 O(n log n) 硬保证，两个已知二次方类（two-run、大位移插入）已根除。双 profile 门禁 7 套件全绿，工作树干净。
 
 **用户随时可重启**：新会话中重新设立 goal 即可从 Gen 48 的存档继续（EVOLUTION.md 的死路表与路由地图就是接力文档）。
+（Gen 49 更新：第三方测评后重新激活——「饱和」判定漏掉了健全性维度，48 代纯性能导向演化没有一代把 `cmp` panic 当输入。教训：不存在真正的五域闭合，除非把「调用方能构造什么」也算进算法输入空间。）
+
+## Gen 49：第三方测评 → soundness 修复代（S1 panic 路径 double-drop）
+
+**背景**：用户要求以第三方视角测评最终版。三方独立工作（对抗性代码审计 / 工业基线调研 / 前沿变体调研）合成报告给出：算法设计优秀、性能良好、**正确性/健全性不合格（有一枚 soundness blocker）**、工程成熟度研究级、过程资产卓越。按优先级逐项处置如下。
+
+### S1（严重）：洞式插入的 panic 路径 double-free —— 实测证实并修复
+
+**审计论断**：`insertion_sort` / `insertion_with_budget` 的洞式插入把待插值 `ptr::read` 进 ManuallyDrop 变量，移位中被 move 过的元素留下 ghost 副本；若用户 `Ord::cmp` 在移位循环中 panic，unwind 按长度 drop 数组会让 ghost 与 real 副本各 drop 一次（对 `T: Drop` 即 double-free），saved 值泄漏零次。该缺陷被 `panic = "abort"` 掩盖（只对本 workspace 生效，下游默认 unwind 暴露）。
+
+**先证后修**（tests/panic_safety.rs，修复前应为红）：
+
+| 用例 | 路径 | 修复前实测 |
+|---|---|---|
+| case A | n=4 直达 insertion_sort | panic 后数组 `[7,9,9]`：id 9 被 drop 两次、saved 泄漏（数组非排列，红 ✓） |
+| case B | n=34 → partial → insertion_with_budget（预算内 panic） | panic 后数组 `[2,2,...]`：id 2 被 drop 两次（红 ✓） |
+
+**修复**：新增 `InsertHole<'a, T>` drop guard（std InsertHole 同构）：`new` 读走入洞值、`shift` memmove 推进洞位、`Drop` 把 saved 写回当前洞位。正常路径 guard drop 即插入落位；panic 路径恢复「每元素恰好存活一次」。两个洞式插入函数迁移到 guard。
+
+**修复后**：两用例绿；双 profile 门禁全绿；**性能金丝雀零成本**（交替 A/B：旧版中位 15.62ms vs guard 版 15.67ms，差 0.3% 噪声内）。
+
+**过程教训（新纪律）**：金丝雀期间出现「新版 random 1M 18.34 vs 旧版 15.62」的 17% 假回退——真因是旧版二进制在**编译结束后立刻测量**（CPU 热相位），新版是闲置 2s 后测量。已定性：**编译与 bench 之间必须间隔或交替执行，禁止编译后立即测量**；gauge（std 侧）对这种相位只动 0.3%，无校准能力。
+
+### M1（中等）：非全序 Ord 契约缺文档
+
+**处置**：`quicksort` 公共文档补契约节：要求全序；违反时 panic 不产生内存不安全（与 std 同级）；`cmp` panic 时数组恢复为合法排列（drop guard 保证）。未加哨兵断言（Hoare/DNF 用安全索引，恶意 cmp 只 panic 不 UB，与 std 同级，加哨兵是纯成本）。
+
+### M2（中等）：panic=abort 基准偏差 —— 量化后保留并公开
+
+**量化**（同 session 交替 A/B ×3，退出/不禁用 abort 两个 exe，新代码）：
+
+| 配置 | random 1M 中位 | SPEED SCORE 中位 |
+|---|---|---|
+| panic=abort（现状） | 15.82 ms | 0.973x |
+| panic=unwind | 16.35 ms | 0.928x |
+| 偏差 | **-3.3%（利己）** | **+4.9%（利己）** |
+
+**处置**：保留 `panic = "abort"` 并在 Cargo.toml/EVOLUTION.md 注明量化。理由：(a) 下游性能由用户自身 profile 决定，两个数字都真实，各自对应用户一种配置；(b) 移除会断裂 48 代分数序列（计时逻辑不变、仅初始化设置，不算方法论变更，但历史不可比重述）；(c) 量化公开后读者可自行换算。
+
+### M3（中等）：计时顺序/black_box —— 本轮不改，记录为 Gen 50+ 候选
+
+「先测 ours 再测 std」的顺序偏差与 black_box 粒度都是真的，但修正会改变全部历史读数的可比性（gauge 只校准相位，不校准顺序）。列为下一次测量学改版的打包项，与「测试文件合并/编号重建」一起做，单独一次判分器换代完成（Gen 31 仪表改版的延续纪律）。
+
+### M4/L 级
+
+- **M4**：panic-safety 测试已入库（两用例）；Miri 未跑（Windows + 工具链版本适配需独立确认），记录在案作为 Gen 50 候选。
+- **L1/L3**：理论 ZST 项与 no_std 化，均不落地（前者不可达，后者无收益需求）。
+- **L2**：`inputs` 收编为 `#[doc(hidden)] pub mod inputs` + 说明注释；license/description 未补（属发布决策，非算法代职责）。
+- **L4**：`break_patterns_sides` 阈值不对称（左 `>=8` 右 `>8`）已统一为 `>=8`，无行为差异，冷路径。
+- **L5/L6**：记录备查（bench 批内中间结果未验证由差分测试补；panic 契约由 M1 的文档补齐）。
+
+### bench 标签更正：pdqsort → ipnsort
+
+本机 rustc 1.96，std `sort_unstable` 自 1.81 起内核换成 ipnsort。bench 列头/分数行/头注释、lib.rs 复杂度注释全部更正；EVOLUTION.md 分数表补读表须知：**1.81 前后同代码读数不同内核，1.81 后读数含金量更高**（ipnsort 比 pdqsort 快 ~1.2x）。同时 rustc 1.96 clippy 新 lint（doc_lazy_continuation / thread_local const）清零。
 
 ## 死路记录
 
@@ -1193,6 +1251,8 @@ assert!(v.windows(2).all(|w| w[0] <= w[1]));
 | Hoare 指针化（ManuallyDrop pivot + 钉位 + 裸指针） | 否决，总分 -9% | random 仅 -3.4%，reverse/sorted +25~54%（parked pivot 失去提前停止效应）；真瓶颈=分支预测（Gen 8） |
 | target-cpu=native | 仅 -1%（噪声内）回退 | 引入机器相关代码生成混淆跨代基线（Gen 18） |
 | BlockQuicksort 完整实现 | 四次推导未闭合 | 尾段 k 记账/中段跨度问题；Gen 27 第五次实现版：中段重取 pivot bug（门禁抓住）+ 性能先负（random 1M +14%），双标回退，方向关闭（除 T: Copy 特化换原语，文献分析亦无收益） |
+| 移除 panic=abort 消除基准偏差 | 否决，量化后保留（Gen 49） | 偏差实测 +3.3%@1M / +4.9% 总分利己，但下游性能由用户 profile 决定，两数字各真实；移除断裂 48 代分数序列，量化注记替代 |
+| Hoare/DNF 加显式哨兵断言（防恶意 Ord 越界） | 否决，文档契约替代（Gen 49） | 安全索引下恶意 cmp 只 panic 不 UB（std 同级），哨兵是每次比较的纯成本；改文档声明全序契约 |
 
 **结论：32 再确认**。有趣的规模交互：48 在大切片上快 4~6.5%（叶子 memmove 相对分区开销更便宜），但在 10k 上慢 36%（叶级 O(CUTOFF²) 开始反超）——几何平均下 32 仍最优。规模自适应 CUTOFF 有 ~2% 的理论空间但复杂度不值，记录观察不实施。
 
