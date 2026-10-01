@@ -1,8 +1,15 @@
 // ============================================================================
 // quicksort_Gen49 —— 「快排进化论」最终版（Gen 49, 2026-10-01）
+//               → Gen 50 增量：外部三家评估后的一行修复（Stacked Borrows）
 //
 // 自包含单文件版本：从 src/lib.rs 摘出，无任何外部依赖（仅 std），
 // 去掉 pub mod inputs; 一行后即可放入任意 crate 直接 cargo build。
+//
+// Gen 50 变更（外部三家独立评估反馈）：
+// - InsertHole::shift 改单指针派生 —— 原写法先 as_ptr() 再 as_mut_ptr()，
+//   实参从左到右求值使可变 retag 作废共享 tag，Stacked Borrows UB
+//   （Miri 实测；Tree Borrows 下原写法合法。修复后两模型均干净）
+// - bail_pos 双生产者语义、非全序契约按实测入文档
 //
 // 算法：原地、不稳定、零分配的泛型 T: Ord 快排。
 // 主要机制（按入口 quicksort_rec 的执行顺序）：
@@ -81,6 +88,14 @@ fn route_direct_lomuto<T: Ord>(arr: &[T]) -> bool {
 /// - bail_pos >= 48 且有连续降序游程：大块降序尾（organ-pipe）-> Lomuto+ninther
 /// - 中间密度：branchless Lomuto
 ///
+/// **bail_pos 语义注意（Gen 50 外部评估发现）**：这个阈值有**两个语义不同的
+/// 生产者**，本文件只记录了其一：
+/// - `partial_insertion_sort` -> 第 9 个下降沿的下标（阈值标定时假设的语义）
+/// - `insertion_with_budget` -> 移位预算耗尽时的外层循环下标（另一个量，
+///   实测 nearly-sorted 上占 ~74%）
+/// 三档阈值的标定是在两种信号混合的分布上完成的。若要重调阈值，必须先
+/// 区分来源重新标定，否则是对着错误分布拟合。
+///
 /// 整个决策 #[inline(never)] 外描：热循环里只剩一次调用，
 /// 规避「热函数体积变化 -> 代码布局位移 -> 无关 case 劣化」。
 #[inline(never)]
@@ -138,7 +153,9 @@ const UNBALANCED_DIV: usize = 8;
 ///
 /// # 契约（与 std slice::sort_unstable 同级）
 /// - `T: Ord` 必须是全序（cmp 自反、反对称、传递）。非全序比较器下
-///   哨兵逻辑可能失效，结果为 panic —— 不产生内存不安全。
+///   哨兵逻辑可能失效：实测（20+ 组不传递/NaN 型，n=2…50,000）未见
+///   panic，但理论上 `hoare_partition` 无界扫描可越界 panic；行为为
+///   「panic 或静默产出无意义结果」，均不产生内存不安全。
 /// - 若 `cmp` panic：drop guard 保证数组仍恢复为合法排列（panic 后
 ///   每元素恰好存活一次，可安全 drop）；不再继续排序。
 pub fn quicksort<T: Ord>(arr: &mut [T]) {
@@ -187,16 +204,17 @@ impl<'a, T: Ord> InsertHole<'a, T> {
     /// 把 `arr[pos-1]` memmove 进洞位，洞位前移一格。
     ///
     /// SAFETY: `pos > 0`
+    /// 把 `arr[pos-1]` memmove 进洞位，洞位前移一格。
+    ///
+    /// SAFETY: `pos > 0`。指针派生纪律（Gen 50 修，外部评估 Miri 发现）：
+    /// 源与目标指针必须从**单一** `as_mut_ptr()` 派生——若先取 `as_ptr()`
+    /// 再在同表达式里取 `as_mut_ptr()`，实参从左到右求值会让可变 retag
+    /// 作废共享 tag，随后的读即 Stacked Borrows UB。
     unsafe fn shift(&mut self) {
         let pos = self.pos;
-        // SAFETY: pos > 0, pos < len
-        unsafe {
-            std::ptr::copy(
-                self.arr.as_ptr().add(pos - 1),
-                self.arr.as_mut_ptr().add(pos),
-                1,
-            )
-        }
+        let base = self.arr.as_mut_ptr(); // 单一 unique retag，派生读写两端
+        // SAFETY: pos > 0，pos < len
+        unsafe { std::ptr::copy(base.add(pos - 1), base.add(pos), 1) }
         self.pos -= 1;
     }
 }
@@ -399,7 +417,11 @@ fn lomuto_pivot<T: Ord>(arr: &mut [T]) {
 }
 
 /// Hoare 分区（pivot 位置跟踪，免 Clone）。调用方须先做 median_of_3_sort。
-/// 返回切分点 k = j+1：arr[..k] <= pivot，arr[k..] > pivot。
+/// 返回切分点 k = j+1：arr[..k] <= pivot，arr[k..] >= pivot（等值元素可落
+/// 任一侧；哨兵不变量 a[0] <= pivot <= a[hi] 在严格弱序下保证终止）。
+///
+/// 非全序 `Ord` 下哨兵不变量可能失效，左扫描可越过 pivot 位跑到 len ——
+/// 用的是安全索引，结果是 panic 而非内存不安全。
 ///
 /// 定位为「逆序数据专家」：逆序输入下 Hoare 分区产出的左区恰好有序，
 /// 可被 partial insertion sort 免费接住（近线性）；而 branchless Lomuto

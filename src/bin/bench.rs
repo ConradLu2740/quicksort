@@ -144,6 +144,36 @@ fn run() {
         );
     }
 
+    // few-unique 种子方差体检（Gen 50，复验外部评估最尖锐的发现）：
+    // 外部三家在 k=2/4/8 上实测 speedup 跨种子跨度 7.5x（cv 91%）——重复密集
+    // 输入的分区树只有十来个节点，单个路由决策翻转就能反转胜负，单种子读数
+    // 不是稳定统计量。自家 bench 的 few-unique 恰是单一固定种子（k=5, n=10k）。
+    // 这里同分布扫 9 个种子，量化自家参数下的方差。
+    {
+        let n = 10_000usize;
+        for k in [2u32, 5, 8] {
+            let mut ratios = Vec::new();
+            for s in 1..=9u64 {
+                let mut rng = sort::inputs::Rng::new(s.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+                let data: Vec<u32> = (0..n).map(|_| rng.next_u32() % k).collect();
+                let (ours_ms, ok1) = batch_time(&data, 5, true);
+                let (std_ms, _) = batch_time(&data, 5, false);
+                all_ok &= ok1;
+                ratios.push(std_ms / ours_ms);
+            }
+            let min = ratios.iter().cloned().fold(f64::INFINITY, f64::min);
+            let max = ratios.iter().cloned().fold(0.0, f64::max);
+            let geo = (ratios.iter().map(|r| r.ln()).sum::<f64>() / ratios.len() as f64).exp();
+            let mean = ratios.iter().sum::<f64>() / ratios.len() as f64;
+            let var = ratios.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / ratios.len() as f64;
+            println!(
+                "info few-unique seed-sweep k={k} n={n}: geo={geo:.3}x min={min:.3}x max={max:.3}x spread={:.1}x cv={:.0}%",
+                max / min,
+                (var.sqrt() / mean * 100.0)
+            );
+        }
+    }
+
     if !all_ok {
         eprintln!("CORRECTNESS GATE FAILED: produced an unsorted array!");
         std::process::exit(1);

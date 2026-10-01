@@ -46,9 +46,9 @@
 
 ## 当前状态
 
-- 世代：**Gen 49**（第三方测评 → soundness 修复代）
-- EVOLUTION SPEED SCORE：**~0.97x（冷相位 gauge 8.88，交替 A/B 三轮 0.952~0.980；S1 修复零成本）**
-- 正确性：双 profile 全绿——debug 12 套件 / release 12 套件（含 200k mega stress、panic-safety ×2）
+- 世代：**Gen 50**（外部三家评估 → Miri 违规修复 + 单种子声明证伪）
+- EVOLUTION SPEED SCORE：**~0.97x（冷相位；含 few-unique 单种子有利偏差，修正后约 0.95x）**
+- 正确性：双 profile 全绿——debug 12 套件 / release 12 套件（含 200k mega stress、panic-safety ×2）；Miri SB+TB 双模型干净（Gen 50 起）
 - 工具链注记：rustc 1.96，std `sort_unstable` 内核 = **ipnsort**（1.81 起替换 pdqsort），bench 标签已更正
 
 ## 分数历史
@@ -105,6 +105,7 @@
 | Gen 47 | —（审计代） | exotic 分布抽查（锯齿波/双层风琴/正弦/块shuffle）全部 ~11~15 ns/elem，矩阵外无隐藏病态；exotic 回归测试入库 | 2026-10-01 |
 | Gen 48 | 饱和判定 | 可识别优化空间穷尽（算法/参数/鲁棒/测量/文档五域全闭合），按「无有用下一动作」条款完成；修正 Gen 45 机制解释 | 2026-10-01 |
 | Gen 49 | 测评修复代 | 第三方测评发现 S1（panic 路径 double-drop，对 Drop 类型是 UB）→ InsertHole guard 修复，panic-safety 测试红→绿；M2 量化 panic=abort 偏差（+3.3%@1M/+4.9% 总分）保留并注明；clippy 1.96 新 lint 清零；bench 标签 pdqsort→ipnsort | 2026-10-01 |
+| Gen 50 | 外部三家评估 | Miri 命中 Stacked Borrows 违规（InsertHole::shift 双取指针，红→绿复验+修复，双模型干净）；few-unique「反超」证伪为单种子假象（9 种子体检 0.901x vs 单种子 1.05x）；CUTOFF 分歧记录不行动；cyclic Lomuto 写侧一次化列入 Gen 51 候选 | 2026-10-01 |
 
 > **读表须知（Gen 46 补注）**：上表分数是「当次运行的 gauge 同档」下的快照。Gen 26 前后（gauge ~8.80 冷档）读数 ~1.02~1.03，Gen 42 之后机器基线漂移（gauge ~8.86 仍叫「冷」但实际更 warm，见 Gen 44），同代码读数降至 ~0.96~0.97。**这不是性能回退**（Gen 44 同 session A/B 已证），跨代比较必须对 gauge 且尽量同 session；判代码优劣的金标准是「我们自己的绝对耗时」的同 session 对比。
 >
@@ -1233,6 +1234,54 @@ assert!(v.windows(2).all(|w| w[0] <= w[1]));
 
 本机 rustc 1.96，std `sort_unstable` 自 1.81 起内核换成 ipnsort。bench 列头/分数行/头注释、lib.rs 复杂度注释全部更正；EVOLUTION.md 分数表补读表须知：**1.81 前后同代码读数不同内核，1.81 后读数含金量更高**（ipnsort 比 pdqsort 快 ~1.2x）。同时 rustc 1.96 clippy 新 lint（doc_lazy_continuation / thread_local const）清零。
 
+## Gen 50：外部三家评估 → Miri 盲区命中 + 单种子声明证伪
+
+**背景**：Gen 49 后把最终版打包（`share/quicksort_Gen49.rs` + 评审包）发给三家独立 agent 离线评估。三家未读仓库、只评测单文件，结论高度收敛且互相印证。
+
+### 50.1 Stacked Borrows 违规（三家之二用 Miri 命中，本仓库独立红→绿复验）
+
+`InsertHole::shift` 原写法先 `self.arr.as_ptr()` 再同表达式 `self.arr.as_mut_ptr()`——实参从左到右求值使可变 retag 作废共享 tag，后续读即 Stacked Borrows UB。
+
+**本仓库复验**（git 修复前版本，最小插入用例，`cargo +nightly miri run`）：
+
+```
+ERROR: Undefined Behavior: attempting a read access ... tag does not exist in the borrow stack
+  at pre_lib.rs:261 InsertHole::shift ← insertion_sort ← quicksort_rec ← quicksort
+```
+
+**修复**（一行，单指针派生）。修后 Miri Stacked Borrows + Tree Borrows 双模型、clean 路径与 panic 注入路径全部 0 UB；双 profile 门禁 + 金丝雀 A/B 分数中性（0.965~0.974 在历史带内）；share/ 副本同步修复。此为 Gen 49 诚实声明「未跑过 Miri」盲区内的真实命中——「没测过的维度一定藏东西」第二次应验（Gen 49 是 panic 维度，Gen 50 是别名模型维度）。
+
+### 50.2 头条声明修正：「few-unique 反超」是单种子假象（自建体检证伪）
+
+外部评估报 few-unique speedup 跨种子跨度 7.5x（n=1e6, cv 91%）。本仓库在自家 bench 参数（k∈{2,5,8}, n=10k）上新增 9 种子 informational 体检（不计入 23 case 分数，保持序列可比；固定种子不动，断跨代序列）：
+
+| k | 9 种子 geo | min | max | spread | cv |
+|---|---|---|---|---|---|
+| 2 | 1.232x | 0.774x | 1.710x | 2.2x | 28% |
+| **5（bench 实际配置）** | **0.901x** | 0.717x | 1.002x | 1.4x | 10% |
+| 8 | 0.870x | 0.795x | 1.001x | 1.3x | 7% |
+
+**自家 bench 的 few-unique 单固定种子读数 1.03~1.56x，而多种子真值 ~0.90x**——「反超」不成立，实际轻微落后。根因：重复密集输入分区树仅十余个节点，单个离散路由决策即可反转胜负（外部在 1e6 上仅 ~14 节点故方差更大）。**修正**：对外表述从「few-unique 反超 3~55%」改为「≈0.9x，种子敏感」；23 case 分数含此不利偏差，真实总分略低于 0.97x。
+
+### 50.3 三家分歧项：CUTOFF 与 random 归因
+
+- **CUTOFF**：一家报 40-48 好 15~18%（残余噪声 5~10%），另一家同 session 多轮扫描判「噪声淹没、不可判定」。**不行动**：两套扫描都建立在非本仓库 harness 上；本仓库 Gen 41/43 的三重确认在本 harness 下仍成立。记录为「换 harness 重扫」候选。
+- **random 落后归因**：两家指向**写侧模式**——std 的 cyclic Lomuto 每元素至多一次写，本实现无条件 swap 每元素 2 读 2 写（写流量约 2 倍），分区内核只跑到读带宽上限的 ~40%。这**部分推翻** Gen 45 修正注记「块化失败主因是净指令数上升」：更可能是基线分区写侧流量过大，块化救不了写侧。**记入 Gen 51 候选：cyclic Lomuto（写侧一次化）——纯泛型、无特化、不需要 block 缓冲。**
+- **「自适应 vs 特化」框架**（两家独立指出）：是假二分——写侧一次化与等值快速路径都是泛型可用手段，不需要放弃任何设计约束。EVOLUTION.md 相关叙事按「已做 X / 未做 Y / 代价 Z」改写。
+
+### 50.4 文档修正（按实测）
+
+- `hoare_partition` 注释 `arr[k..] > pivot` → `>= pivot`（等值可落右段，实现正确）
+- 公共契约：非全序 `Ord` 实测 20+ 组 0 panic，「结果为 panic」改为「panic 或静默产出无意义结果，均不内存不安全」
+- `wants_hoare` 文档补 `bail_pos` 双生产者语义警告（外部插桩：nearly-sorted 上 ~74% 的 bail_pos 来自移位预算路径而非第 9 下降沿——阈值标定依据的语义与主要信号来源不符，重调阈值前必须分源）
+- Gen 45 块化归因的修正注记在死路表标注「待 Gen 51 实验定论」
+
+### 50.5 bench 缺页污染疑点的自查结论
+
+外部评估怀疑我们的时序 harness 有「每轮新分配缺页进计时区」问题——**不成立**：`batch_time` 的 `buf = data.to_vec()` 在计时区外一次性完成，计时区内只做 `copy_from_slice`（页已驻留）。该结论应记入「外部评估哪些没命中」——评估者的扫描 harness 确有此问题，但我们的是干净的。
+
+**EVOLUTION SPEED SCORE：~0.97x（冷相位带内；含 few-unique 单种子有利偏差，按其修正约 0.95x）**
+
 ## 死路记录
 
 **EVOLUTION SPEED SCORE：无代码改动（鲁棒性审计）；矩阵外分布无病态，结论记录在案**
@@ -1250,7 +1299,8 @@ assert!(v.windows(2).all(|w| w[0] <= w[1]));
 | 「3-sort 三点只有两值」先验信号 | 未实验，估算否决 | organ-pipe 会被迫走 DNF（0.112→~0.3ms），亏的比 few-unique 赚的多（净 -10% 估算） |
 | Hoare 指针化（ManuallyDrop pivot + 钉位 + 裸指针） | 否决，总分 -9% | random 仅 -3.4%，reverse/sorted +25~54%（parked pivot 失去提前停止效应）；真瓶颈=分支预测（Gen 8） |
 | target-cpu=native | 仅 -1%（噪声内）回退 | 引入机器相关代码生成混淆跨代基线（Gen 18） |
-| BlockQuicksort 完整实现 | 四次推导未闭合 | 尾段 k 记账/中段跨度问题；Gen 27 第五次实现版：中段重取 pivot bug（门禁抓住）+ 性能先负（random 1M +14%），双标回退，方向关闭（除 T: Copy 特化换原语，文献分析亦无收益） |
+| BlockQuicksort 完整实现 | 四次推导未闭合 | 尾段 k 记账/中段跨度问题；Gen 27 第五次实现版：中段重取 pivot bug（门禁抓住）+ 性能先负（random 1M +14%），双标回退，方向关闭（除 T: Copy 特化换原语，文献分析亦无收益）。**Gen 50 注**：外部两家评估用内核分解支持「块化救不了写侧」但把主因归为无条件 swap 的 2R2W 写流量——真实修法疑为 cyclic Lomuto 而非 block 缓冲，列入 Gen 51 候选 |
+| 洞式插入 shift 双取指针（as_ptr + as_mut_ptr 同表达式） | 已修（Gen 50，一行） | 实参从左到右求值，可变 retag 作废共享 tag → Stacked Borrows UB。Miri 三家之二命中 + 本仓库修复前版本红→绿复验（pre_lib.rs:261）。修后 SB+TB 双模型干净。教训：unsafe 写操作一律单指针派生 |
 | 移除 panic=abort 消除基准偏差 | 否决，量化后保留（Gen 49） | 偏差实测 +3.3%@1M / +4.9% 总分利己，但下游性能由用户 profile 决定，两数字各真实；移除断裂 48 代分数序列，量化注记替代 |
 | Hoare/DNF 加显式哨兵断言（防恶意 Ord 越界） | 否决，文档契约替代（Gen 49） | 安全索引下恶意 cmp 只 panic 不 UB（std 同级），哨兵是每次比较的纯成本；改文档声明全序契约 |
 
