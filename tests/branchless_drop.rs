@@ -114,12 +114,19 @@ fn branchless_lomuto_non_copy_drop_types_are_safe() {
             let got: Vec<u32> = v.iter().map(|h| h.key).collect();
             assert_eq!(got, expect, "n={n} seed={seed}: 排序结果不正确");
             // 堆载荷确实存在（每个元素都持有有效 String 分配）
-            assert!(v.iter().all(|h| h.touch() >= "payload-".len()), "n={n}: payload 异常");
+            assert!(
+                v.iter().all(|h| h.touch() >= "payload-".len()),
+                "n={n}: payload 异常"
+            );
 
             // 多重集守恒：id 恰好一个都不少
             let mut ids: Vec<u32> = v.iter().map(|h| h.id).collect();
             ids.sort_unstable();
-            assert_eq!(ids, (0..n as u32).collect::<Vec<_>>(), "n={n}: 多重集不守恒");
+            assert_eq!(
+                ids,
+                (0..n as u32).collect::<Vec<_>>(),
+                "n={n}: 多重集不守恒"
+            );
 
             drop(v); // 此刻才析构 —— 若 pivot 搬运有 double-drop，计数立刻异常
             each_id_dropped_exactly_once(&log.lock().unwrap(), &format!("n={n} seed={seed}"));
@@ -192,7 +199,11 @@ fn branchless_lomuto_panic_path_non_copy_drop_is_safe() {
             log: log.clone(),
         })
         .collect();
-    v.push(PanicKey { key: 500, id: 999, log: log.clone() });
+    v.push(PanicKey {
+        key: 500,
+        id: 999,
+        log: log.clone(),
+    });
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         quicksort(&mut v);

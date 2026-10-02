@@ -94,9 +94,7 @@ impl Dist {
     /// 生成该分布的确定性输入（u32）。
     pub fn make(self, n: usize) -> Vec<u32> {
         let mut rng = Rng::new(
-            0xC0FF_EE00
-                ^ (n as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
-                ^ ((self as u64) << 32),
+            0xC0FF_EE00 ^ (n as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ ((self as u64) << 32),
         );
         match self {
             Dist::Random => (0..n).map(|_| rng.next_u32()).collect(),

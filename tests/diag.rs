@@ -48,7 +48,10 @@ fn assert_ratio(name: &str, data: &[C], bound: f64) {
     let (count, ok) = count_comparisons(data);
     let ratio = count as f64 / (n * n.log2());
     assert!(ok, "{name}: output not sorted");
-    println!("{name:<8} n={len:<7} comparisons={count:>9} ({ratio:.2} n log n)", len = data.len());
+    println!(
+        "{name:<8} n={len:<7} comparisons={count:>9} ({ratio:.2} n log n)",
+        len = data.len()
+    );
     assert!(
         ratio <= bound,
         "{name}: {ratio:.2} n log n exceeds bound {bound} n log n —— 疑似结构性退化（参考 Gen 5 事故：6.38 n log n）"
@@ -60,11 +63,7 @@ fn comparison_counts_stay_near_n_log_n() {
     const N: usize = 10_000;
     let bound = 3.0;
 
-    assert_ratio(
-        "sorted",
-        &(0..N as u32).map(C).collect::<Vec<_>>(),
-        bound,
-    );
+    assert_ratio("sorted", &(0..N as u32).map(C).collect::<Vec<_>>(), bound);
     assert_ratio(
         "reverse",
         &(0..N as u32).rev().map(C).collect::<Vec<_>>(),

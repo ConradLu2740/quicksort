@@ -126,7 +126,9 @@ fn run() {
         let (ms, _ok) = batch_time(&data, 3, false);
         ms
     };
-    println!("phase gauge (std 1M random): {gauge:.3} ms —— 跨代比较请对 gauge（~8.8 = 冷相, ~10.3 = 热相）");
+    println!(
+        "phase gauge (std 1M random): {gauge:.3} ms —— 跨代比较请对 gauge（~8.8 = 冷相, ~10.3 = 热相）"
+    );
 
     // 附加信息测量（Gen 42，不计入 23 case 分数——保持分数序列跨代可比）：
     // two-run 分布（[升序 run | 升序 run]，合并有序流的真实类）——
@@ -184,18 +186,21 @@ fn run() {
     {
         let pool = 8usize;
         let reps = 3usize;
-        let gen_pool =
-            |n: usize, seed: u64, k: Option<u32>| -> Vec<Vec<u32>> {
-                let mut out = Vec::with_capacity(pool);
-                for i in 0..pool {
-                    let mut rng = sort::inputs::Rng::new(seed.wrapping_add(i as u64));
-                    out.push((0..n).map(|_| match k {
-                        Some(k) => rng.next_u32() % k,
-                        None => rng.next_u32(),
-                    }).collect());
-                }
-                out
-            };
+        let gen_pool = |n: usize, seed: u64, k: Option<u32>| -> Vec<Vec<u32>> {
+            let mut out = Vec::with_capacity(pool);
+            for i in 0..pool {
+                let mut rng = sort::inputs::Rng::new(seed.wrapping_add(i as u64));
+                out.push(
+                    (0..n)
+                        .map(|_| match k {
+                            Some(k) => rng.next_u32() % k,
+                            None => rng.next_u32(),
+                        })
+                        .collect(),
+                );
+            }
+            out
+        };
         let cold_time = |pools: &[Vec<Vec<u32>>], ours: bool| -> f64 {
             let mut best = Vec::new();
             for rep_pool in pools.iter().take(reps) {
@@ -226,7 +231,12 @@ fn run() {
                 let (std_warm, _) = batch_time(&data, 5, false);
                 println!(
                     "info cold/warm n={n:>6} {name:<14}: cold ratio={:.3}x (ours {:.4?}ms) | warm ratio={:.3}x (ours {:.4?}ms) | std cold {:.4?}ms warm {:.4?}ms",
-                    std_cold / ours_cold, ours_cold, std_warm / ours_warm, ours_warm, std_cold, std_warm
+                    std_cold / ours_cold,
+                    ours_cold,
+                    std_warm / ours_warm,
+                    ours_warm,
+                    std_cold,
+                    std_warm
                 );
             }
         }

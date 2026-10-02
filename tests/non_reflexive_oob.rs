@@ -35,7 +35,7 @@ impl Eq for SentinelBreaker {}
 impl PartialOrd for SentinelBreaker {
     fn partial_cmp(&self, o: &Self) -> Option<Ordering> {
         Some(self.cmp(o)) // 必须手写委托给 cmp：derive(PartialOrd) 会比较
-                          // 内部字段、绕过自定义 Ord，测了个寂寞（外部评估踩过）
+        // 内部字段、绕过自定义 Ord，测了个寂寞（外部评估踩过）
     }
 }
 impl Ord for SentinelBreaker {
@@ -73,7 +73,10 @@ fn non_reflexive_ord_completes_without_panic_and_conserves_multiset() {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             quicksort(&mut v);
         }));
-        assert!(result.is_ok(), "n={n}: 非自反 Ord 修复后不应 panic（Gen 51 前此处越界 panic）");
+        assert!(
+            result.is_ok(),
+            "n={n}: 非自反 Ord 修复后不应 panic（Gen 51 前此处越界 panic）"
+        );
         assert_eq!(multiset(&v), before, "n={n}: 多重集不守恒");
     }
 }

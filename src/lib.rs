@@ -632,7 +632,12 @@ fn break_patterns<T>(arr: &mut [T]) {
         *seed ^= *seed >> 27;
         (seed.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 33) as usize % len
     };
-    let (a, b, c, d) = (idx(&mut seed), idx(&mut seed), idx(&mut seed), idx(&mut seed));
+    let (a, b, c, d) = (
+        idx(&mut seed),
+        idx(&mut seed),
+        idx(&mut seed),
+        idx(&mut seed),
+    );
     if a != b {
         arr.swap(a, b);
     }

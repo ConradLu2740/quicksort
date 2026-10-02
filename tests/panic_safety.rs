@@ -14,7 +14,7 @@
 //! 本文件仅在 debug profile 有意义：release profile 设了 panic = "abort"，
 //! catch_unwind 不适用，测试整体跳过。
 
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
 use sort::quicksort;
@@ -44,7 +44,10 @@ impl Ord for DropCounter {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         let ord = self.key.cmp(&other.key);
         if self.id == 7 && ord == std::cmp::Ordering::Greater {
-            panic!("adversarial Ord::cmp panic (id 7, key {} > {})", self.key, other.key);
+            panic!(
+                "adversarial Ord::cmp panic (id 7, key {} > {})",
+                self.key, other.key
+            );
         }
         ord
     }
@@ -88,7 +91,11 @@ fn panic_in_insertion_sort_happy_path() {
     // panic。之前已完成 2 次 shift：id=9(key3) 有 real + ghost 两份 →
     // 修复前 double drop。
     let log = Arc::new(Mutex::new(Vec::new()));
-    let mk = |id: u32, key: u32| DropCounter { id, key, log: log.clone() };
+    let mk = |id: u32, key: u32| DropCounter {
+        id,
+        key,
+        log: log.clone(),
+    };
     let mut arr = vec![mk(9, 3), mk(2, 4), mk(7, 2), mk(1, 0)];
     let orig: Vec<u32> = arr.iter().map(|d| d.id).collect();
 
@@ -110,7 +117,11 @@ fn panic_in_insertion_with_budget_path() {
     // 循环」中作为左值出现，此时已 shift 3 次（key=3/key=50 各有 ghost）
     // → panic。修复前 id=50 被 double-drop。
     let log = Arc::new(Mutex::new(Vec::new()));
-    let mk = |id: u32, key: u32| DropCounter { id, key, log: log.clone() };
+    let mk = |id: u32, key: u32| DropCounter {
+        id,
+        key,
+        log: log.clone(),
+    };
     let mut arr: Vec<DropCounter> = (0..30)
         .map(|i| mk(100 + i, 1))
         .chain([mk(2, 50), mk(3, 50 + 1), mk(7, 2), mk(1, 0)])

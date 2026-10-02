@@ -3,7 +3,7 @@
 //! 铁律：任何世代改动必须先让这里的全部测试通过，才允许跑基准。
 //! 判据：我们的 quicksort 输出必须与 std `sort_unstable` 逐元素一致。
 
-use sort::inputs::{Dist, Dist::*, DISTS, Rng};
+use sort::inputs::{DISTS, Dist, Dist::*, Rng};
 use sort::quicksort;
 
 fn check(data: &[u32]) {
@@ -81,7 +81,14 @@ fn large_scale_differential() {
     // 大 n 下的病态（深层递归、深度预算路径、叶子行为）只有规模能触发。
     const N: usize = 20_000;
     let mut rng = Rng::new(0xA11CE);
-    let names = ["random", "few-unique", "sorted", "reverse", "nearly-sorted", "organ-pipe"];
+    let names = [
+        "random",
+        "few-unique",
+        "sorted",
+        "reverse",
+        "nearly-sorted",
+        "organ-pipe",
+    ];
     for name in names {
         let data: Vec<u32> = match name {
             "random" => (0..N).map(|_| rng.next_u32()).collect(),

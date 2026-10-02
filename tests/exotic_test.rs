@@ -6,7 +6,11 @@ fn timeit(name: &str, v: &mut [u32]) {
     quicksort(v);
     let dt = t.elapsed();
     assert!(v.windows(2).all(|w| w[0] <= w[1]), "{name} unsorted");
-    println!("{name:<22} n={:>7} took {dt:>12.3?} ({:.1} ns/elem)", v.len(), dt.as_nanos() as f64 / v.len() as f64);
+    println!(
+        "{name:<22} n={:>7} took {dt:>12.3?} ({:.1} ns/elem)",
+        v.len(),
+        dt.as_nanos() as f64 / v.len() as f64
+    );
 }
 
 #[test]
@@ -37,7 +41,12 @@ fn exotic_patterns_sanity() {
     // 4. 随机块交换（有序数组的块级 shuffle）
     let mut v: Vec<u32> = (0..n as u32).collect();
     let mut seed = 0xDEAD_BEEFu64;
-    let mut next = || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; (seed % n as u64) as usize };
+    let mut next = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed % n as u64) as usize
+    };
     let block = n / 50;
     for _ in 0..50 {
         let (a, b) = (next(), next());
