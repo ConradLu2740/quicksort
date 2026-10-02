@@ -174,6 +174,64 @@ fn run() {
         }
     }
 
+    // 冷/热对照体检（Gen 51，复验外部评估「同数据重复热身」指控）：
+    // 外部评估实测：对同一份数据重复排序，ours 提速至 2.4 倍而 std 恒定
+    // （few-distinct 上 0.022→0.009ms），机制推测是分支预测器跨轮保留。
+    // 本判分器的批设计每配置把同一数据排 20 次，系统性采到热端——若 warmup
+    // 只利己方，23 case 分数就有结构性乐观偏差。这里同分布对比：
+    //   warm = 现有 batch_time 语义（同数据 copy 复位后排 k 次）
+    //   cold = 每轮新数据池（8 个互异数组，计时区内逐个排，不复位）
+    {
+        let pool = 8usize;
+        let reps = 3usize;
+        let gen_pool =
+            |n: usize, seed: u64, k: Option<u32>| -> Vec<Vec<u32>> {
+                let mut out = Vec::with_capacity(pool);
+                for i in 0..pool {
+                    let mut rng = sort::inputs::Rng::new(seed.wrapping_add(i as u64));
+                    out.push((0..n).map(|_| match k {
+                        Some(k) => rng.next_u32() % k,
+                        None => rng.next_u32(),
+                    }).collect());
+                }
+                out
+            };
+        let cold_time = |pools: &[Vec<Vec<u32>>], ours: bool| -> f64 {
+            let mut best = Vec::new();
+            for rep_pool in pools.iter().take(reps) {
+                let t = Instant::now();
+                for buf in rep_pool {
+                    let mut buf = buf.clone();
+                    if ours {
+                        quicksort(&mut buf);
+                    } else {
+                        buf.sort_unstable();
+                    }
+                    black_box(&buf);
+                }
+                best.push(t.elapsed().as_secs_f64() * 1e3 / pool as f64);
+            }
+            median(&mut best)
+        };
+        for n in [1_000usize, 10_000] {
+            for (name, k) in [("random", None), ("few-unique-k5", Some(5u32))] {
+                let seed = 0xC01D_5EED;
+                let pools: Vec<Vec<Vec<u32>>> = (0..reps)
+                    .map(|r| gen_pool(n, seed + r as u64 * 1000, k))
+                    .collect();
+                let ours_cold = cold_time(&pools, true);
+                let std_cold = cold_time(&pools, false);
+                let data = pools[0][0].clone();
+                let (ours_warm, _) = batch_time(&data, 5, true);
+                let (std_warm, _) = batch_time(&data, 5, false);
+                println!(
+                    "info cold/warm n={n:>6} {name:<14}: cold ratio={:.3}x (ours {:.4?}ms) | warm ratio={:.3}x (ours {:.4?}ms)",
+                    std_cold / ours_cold, ours_cold, std_warm / ours_warm, ours_warm
+                );
+            }
+        }
+    }
+
     if !all_ok {
         eprintln!("CORRECTNESS GATE FAILED: produced an unsorted array!");
         std::process::exit(1);

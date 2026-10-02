@@ -18,6 +18,9 @@
 //!   panic 路径上对 T: Drop 原是 double-free，详见 tests/panic_safety.rs）
 //! - Gen 50：外部三家评估反馈 —— shift 单指针化修 Stacked Borrows 违规
 //!   （Miri 验证）；bail_pos 双生产者语义入文档；非全序契约按实测修正
+//! - Gen 51：外部三家复评 —— hoare 双扫描加显式边界（非自反 Ord 越界
+//!   panic 见证加固，金丝雀零成本）；bench 新增 cold/warm 热身对照
+//!   （同数据重复约 2 倍利己偏差，23 case 分数为热端口径）
 
 /// 判分器脚手架（分布生成器/PRNG）：仅供 bench 与测试使用，不是库 API。
 #[doc(hidden)]
@@ -215,11 +218,13 @@ const UNBALANCED_DIV: usize = 8;
 ///   含 20k 规模全分布与 release-only 200k 七模式 stress
 ///
 /// # 契约（与 std 同级）
-/// - `T: Ord` 必须是全序：cmp 自反、反对称、传递。非全序比较器
-///   （如 NaN 包装型）下哨兵逻辑可能失效：实测（20+ 组不传递/NaN 型，
-///   n=2…50,000）未见 panic，但理论上 `hoare_partition` 无界扫描可越界
-///   panic；行为为「panic 或静默产出无意义结果」，均不产生内存不安全
-///   （与 `slice::sort_unstable` 同级）。
+/// - `T: Ord` 必须是全序：cmp 自反、反对称、传递。非全序比较器下哨兵
+///   逻辑可能失效，行为为「静默产出无意义结果」。触发越界跑飞需要
+///   **非自反**（`cmp(x,x) != Equal`，比「非传递」更窄——石头剪刀布型
+///   不触发）。Gen 51 前非自反输入曾构造出 hoare 左扫描越界 panic 见证
+///   （公开 API，n >= CUTOFF+1，安全索引边界检查非 UB）；Gen 51 已给
+///   双扫描加显式边界：合法 Ord 下哨兵先触发、零行为变化，非自反输入
+///   下不再 panic/挂起，多重集守恒（tests/non_reflexive_oob.rs）。
 /// - 若 `cmp` panic：以 drop guard 保证数组仍恢复为合法排列（panic
 ///   后每元素恰好存活一次，可安全 drop）；不再继续排序。
 pub fn quicksort<T: Ord>(arr: &mut [T]) {
@@ -512,10 +517,13 @@ fn hoare_partition<T: Ord>(arr: &mut [T]) -> usize {
     let mut p = hi / 2;
 
     loop {
-        while arr[i] < arr[p] {
+        // i < hi / j > 0 边界（Gen 51）：合法 Ord 下哨兵先触发、永不生效；
+        // 非自反 Ord（cmp(x,x)==Less，pivot 位失去阻挡）下把越界 panic 从
+        // 「可能」变成「不可能」。零行为变化、零正确性影响。
+        while i < hi && arr[i] < arr[p] {
             i += 1;
         }
-        while arr[j] > arr[p] {
+        while j > 0 && arr[j] > arr[p] {
             j -= 1;
         }
         if i >= j {
@@ -594,6 +602,7 @@ fn dnf_partition<T: Ord>(arr: &mut [T]) -> (usize, usize) {
             lt += 1;
             i += 1;
         } else if arr[p] < arr[i] {
+            debug_assert!(gt > 0); // 不变量（Gen 51，外部评估建议固化）：gt 递减到 p 时 pivot 已被换到 i 位、比较转相等而退出，合法 Ord 下不可达
             arr.swap(i, gt);
             if p == gt {
                 p = i;
@@ -650,11 +659,14 @@ fn scramble_patterns<T>(arr: &mut [T]) {
 
 /// 坏分区（任一侧 < len/8）时对两侧分别调用模式粉碎。
 /// 注意：必须分别作用于左/右两个子切片 —— 对整段调用会打乱分区边界！
+/// 右阈 `>= 9` 的来历：右切片是 `arr[gt+1..]`，长度 = len-gt-1；
+/// `break_patterns` 内部 len < 8 no-op，所以守卫应为「切片长度 >= 8」
+/// 即 `len - gt >= 9`（Gen 49 把右阈改成 `>= 8` 时仍差 1，Gen 51 修正）。
 fn break_patterns_sides<T>(arr: &mut [T], lt: usize, gt: usize) {
     if lt >= 8 {
         break_patterns(&mut arr[..lt]);
     }
-    if arr.len() - gt >= 8 {
+    if arr.len() - gt >= 9 {
         break_patterns(&mut arr[gt + 1..]);
     }
 }

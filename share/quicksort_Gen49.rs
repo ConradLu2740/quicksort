@@ -1,5 +1,7 @@
 // ============================================================================
 // quicksort_Gen49 —— 「快排进化论」最终版（Gen 49, 2026-10-01）
+//               → Gen 51 增量：外部三家复评——hoare 双扫描显式边界
+//                 （非自反 Ord 越界 panic 见证加固，金丝雀零成本）
 //               → Gen 50 增量：外部三家评估后的一行修复（Stacked Borrows）
 //
 // 自包含单文件版本：从 src/lib.rs 摘出，无任何外部依赖（仅 std），
@@ -153,9 +155,12 @@ const UNBALANCED_DIV: usize = 8;
 ///
 /// # 契约（与 std slice::sort_unstable 同级）
 /// - `T: Ord` 必须是全序（cmp 自反、反对称、传递）。非全序比较器下
-///   哨兵逻辑可能失效：实测（20+ 组不传递/NaN 型，n=2…50,000）未见
-///   panic，但理论上 `hoare_partition` 无界扫描可越界 panic；行为为
-///   「panic 或静默产出无意义结果」，均不产生内存不安全。
+///   哨兵逻辑可能失效，行为为「静默产出无意义结果」。触发越界跑飞需要
+///   **非自反**（cmp(x,x) != Equal，比「非传递」更窄——石头剪刀布型
+///   不触发）。Gen 51 前非自反输入曾构造出 hoare 左扫描越界 panic 见证
+///   （公开 API，n >= CUTOFF+1，安全索引边界检查非 UB）；Gen 51 已给
+///   双扫描加显式边界：合法 Ord 下哨兵先触发、零行为变化，非自反输入
+///   下不再 panic/挂起，多重集守恒。
 /// - 若 `cmp` panic：drop guard 保证数组仍恢复为合法排列（panic 后
 ///   每元素恰好存活一次，可安全 drop）；不再继续排序。
 pub fn quicksort<T: Ord>(arr: &mut [T]) {
@@ -418,7 +423,8 @@ fn lomuto_pivot<T: Ord>(arr: &mut [T]) {
 
 /// Hoare 分区（pivot 位置跟踪，免 Clone）。调用方须先做 median_of_3_sort。
 /// 返回切分点 k = j+1：arr[..k] <= pivot，arr[k..] >= pivot（等值元素可落
-/// 任一侧；哨兵不变量 a[0] <= pivot <= a[hi] 在严格弱序下保证终止）。
+/// 任两侧；哨兵不变量 a[0] <= pivot <= a[hi] 在严格弱序下保证终止）。
+/// Gen 51：双扫描加显式边界 i < hi / j > 0（防非自反 Ord 跑飞）。
 ///
 /// 非全序 `Ord` 下哨兵不变量可能失效，左扫描可越过 pivot 位跑到 len ——
 /// 用的是安全索引，结果是 panic 而非内存不安全。
@@ -433,10 +439,13 @@ fn hoare_partition<T: Ord>(arr: &mut [T]) -> usize {
     let mut p = hi / 2;
 
     loop {
-        while arr[i] < arr[p] {
+        // i < hi / j > 0 边界（Gen 51）：合法 Ord 下哨兵先触发、永不生效；
+        // 非自反 Ord（cmp(x,x)==Less，pivot 位失去阻挡）下把越界 panic 从
+        // 「可能」变成「不可能」。零行为变化、零正确性影响。
+        while i < hi && arr[i] < arr[p] {
             i += 1;
         }
-        while arr[j] > arr[p] {
+        while j > 0 && arr[j] > arr[p] {
             j -= 1;
         }
         if i >= j {
@@ -512,6 +521,7 @@ fn dnf_partition<T: Ord>(arr: &mut [T]) -> (usize, usize) {
             lt += 1;
             i += 1;
         } else if arr[p] < arr[i] {
+            debug_assert!(gt > 0); // 不变量（Gen 51）：gt 递减到 p 时 pivot 已被换到 i 位、比较转相等而退出，合法 Ord 下不可达
             arr.swap(i, gt);
             if p == gt {
                 p = i;
@@ -567,11 +577,13 @@ fn scramble_patterns<T>(arr: &mut [T]) {
 
 /// 坏分区（任一侧 < len/8）时对两侧分别调用模式粉碎。
 /// 注意：必须分别作用于左/右两个子切片 —— 对整段调用会打乱分区边界！
+/// 右阈 `>= 9`：右切片 `arr[gt+1..]` 长度 = len-gt-1，`break_patterns`
+/// 内部 len < 8 no-op，故守卫应为「切片长度 >= 8」即 `len-gt >= 9`。
 fn break_patterns_sides<T>(arr: &mut [T], lt: usize, gt: usize) {
     if lt >= 8 {
         break_patterns(&mut arr[..lt]);
     }
-    if arr.len() - gt >= 8 {
+    if arr.len() - gt >= 9 {
         break_patterns(&mut arr[gt + 1..]);
     }
 }

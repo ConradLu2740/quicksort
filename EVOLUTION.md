@@ -46,9 +46,9 @@
 
 ## 当前状态
 
-- 世代：**Gen 50**（外部三家评估 → Miri 违规修复 + 单种子声明证伪）
-- EVOLUTION SPEED SCORE：**~0.97x（冷相位；含 few-unique 单种子有利偏差，修正后约 0.95x）**
-- 正确性：双 profile 全绿——debug 12 套件 / release 12 套件（含 200k mega stress、panic-safety ×2）；Miri SB+TB 双模型干净（Gen 50 起）
+- 世代：**Gen 51**（外部三家复评第二轮 → 热身偏差实锤 + hoare 加固）
+- EVOLUTION SPEED SCORE：**~0.95x（热端口径；cold/warm 对照显示冷端 random ~0.5x，对外须双口径）**
+- 正确性：双 profile 全绿——debug 14 套件 / release 14 套件（含 200k mega stress、panic-safety ×2、non-reflexive OOB ×2）；Miri SB+TB 干净
 - 工具链注记：rustc 1.96，std `sort_unstable` 内核 = **ipnsort**（1.81 起替换 pdqsort），bench 标签已更正
 
 ## 分数历史
@@ -106,6 +106,7 @@
 | Gen 48 | 饱和判定 | 可识别优化空间穷尽（算法/参数/鲁棒/测量/文档五域全闭合），按「无有用下一动作」条款完成；修正 Gen 45 机制解释 | 2026-10-01 |
 | Gen 49 | 测评修复代 | 第三方测评发现 S1（panic 路径 double-drop，对 Drop 类型是 UB）→ InsertHole guard 修复，panic-safety 测试红→绿；M2 量化 panic=abort 偏差（+3.3%@1M/+4.9% 总分）保留并注明；clippy 1.96 新 lint 清零；bench 标签 pdqsort→ipnsort | 2026-10-01 |
 | Gen 50 | 外部三家评估 | Miri 命中 Stacked Borrows 违规（InsertHole::shift 双取指针，红→绿复验+修复，双模型干净）；few-unique「反超」证伪为单种子假象（9 种子体检 0.901x vs 单种子 1.05x）；CUTOFF 分歧记录不行动；cyclic Lomuto 写侧一次化列入 Gen 51 候选 | 2026-10-01 |
+| Gen 51 | 外部三家复评二轮 | cold/warm 对照实锤热身偏差（冷端 random 1k 0.483x vs 热端 0.950x，23 case 分数系统性乐观约 2 倍，改双口径）；hoare 双扫描加显式边界（非自反 Ord 越界 panic 见证加固，金丝雀零成本）；cyclic Lomuto 被两家金丝雀独立否决入死路；三路直进列 Gen 52 候选 | 2026-10-02 |
 
 > **读表须知（Gen 46 补注）**：上表分数是「当次运行的 gauge 同档」下的快照。Gen 26 前后（gauge ~8.80 冷档）读数 ~1.02~1.03，Gen 42 之后机器基线漂移（gauge ~8.86 仍叫「冷」但实际更 warm，见 Gen 44），同代码读数降至 ~0.96~0.97。**这不是性能回退**（Gen 44 同 session A/B 已证），跨代比较必须对 gauge 且尽量同 session；判代码优劣的金标准是「我们自己的绝对耗时」的同 session 对比。
 >
@@ -1282,6 +1283,64 @@ ERROR: Undefined Behavior: attempting a read access ... tag does not exist in th
 
 **EVOLUTION SPEED SCORE：~0.97x（冷相位带内；含 few-unique 单种子有利偏差，按其修正约 0.95x）**
 
+## Gen 51：外部三家复评（第二轮）→ 热身偏差实锤 + hoare 加固
+
+**背景**：第二版评审包（含 C5 八问）再发三家。三家全部确认 Gen 50 修复有效、
+Miri 双模型干净、无第三处 unsafe 问题；C5.7（hoare 越界）与 C5.8（种子方差
+翻转点）给出完整答卷。本轮三件事：
+
+### 51.1 头条口径再修正：23 case 分数是「同数据重复」热端口径（自建 cold/warm 对照实锤）
+
+外部评估指控：判分器每配置把同一数据排 20 次，而 ours 对重复数据有 2.4 倍
+热身提速（分支预测器跨轮保留）、std 恒定——bench 系统性采到热端。
+本仓库新增 cold/warm informational 对照（n=1k/10k × random/few-unique）：
+
+| 配置 | cold ratio（每轮新数据） | warm ratio（现 bench 语义） |
+|---|---|---|
+| random n=1k | **0.483x** | 0.950x |
+| few-unique n=1k | **0.456x** | 0.882x |
+| random n=10k | **0.531x** | 0.649x |
+| few-unique n=10k | **0.489x** | 0.726x |
+
+绝对耗时印证方向：ours 1k random 冷 0.0132ms vs 热 0.0040ms（3.3 倍热身），
+std 侧几乎不动。**外部在交替直测下读到 0.44~0.53x、我们 bench 读 0.89x 的
+核心分歧不是分布集构成，是这个热身偏差**（Gen 50 §3.1 曾归因于分布集，修正）。
+**修正后口径**：23 case 分数系统性高于冷性能约 1.5~2 倍；对外必须双口径
+（「热端 ~0.95x / 冷端 random ~0.5x」）。历史分数不改写（同口径仍可比），
+cold/warm 行随 bench 常驻。这同时部分解释了「0.97x 打平」为何在外部独立
+harness 上系统性不可复现——不是造假，是口径，但也不能再当头条用。
+
+### 51.2 hoare 双扫描加显式边界（C5.7 答卷 + 加固）
+
+外部构造出公开 API 越界见证：非**自反**比较器（`cmp(x,x)==Less`，比非传递
+更窄的触发条件）使 pivot 位失去阻挡，左扫描跑飞到 `arr[len]`——安全索引
+边界检查 panic、非 UB。本仓库独立复验（tests/non_reflexive_oob.rs）：
+本构造 n=34 起触发（顶层 n=33 被 `i>=j` 检查挡住、panic 落在长度 33 的
+子数组里；外部构造可做 n=33 = CUTOFF+1，即分区路径的尺寸下界）。
+**修复**：左右扫描加 `i < hi` / `j > 0` 显式边界。合法 Ord 下哨兵先触发、
+边界永不生效（零行为变化）；交替 A/B 金丝雀判决零成本（random/reverse/
+nearly-sorted/organ-pipe 全部噪声带内）。修复后非自反输入完成排序（输出
+无意义，契约允许）、不 panic、多重集守恒——测试改为断言该性质。
+附带：`dnf_partition` 的 `gt -= 1` 补 `debug_assert!(gt > 0)` 固化不变量
+（外部评估要求，合法 Ord 下不可达）；`break_patterns_sides` 右阈修正为
+`len-gt >= 9`（右切片长度是 len-gt-1，Gen 50 的 `>= 8` 仍差 1，无害但不对称）。
+
+### 51.3 Gen 51 原候选「cyclic Lomuto」被两家独立实证否决 —— 死路表归档
+
+外部两家各自做了金丝雀：(a) 把 std 1.96 同类 cyclic 分区逐行移植进 Gen 50，
+**全面变慢 5~25%**（random 1.83→2.09、few_unique 1.91→2.37）；(b) 穷举证明
+朴素 cyclic-hole 形式**根本不是合法分区器**（4372 例 1092 失败，洞跳走后
+分区边界失守，静默产出错误排序——门禁测试很容易漏）。两家共同指出真正的
+修法方向：**重复密集数据直接进三路分区**（branchless 循环里顺带统计等值数，
+pdqsort/ipnsort 同款），同时修 few-unique 1.5~1.8x 差距与 5 倍种子悬崖
+（翻转点已由外部插桩定位：k=2 时 dnf=0 → 0.6x，dnf=1 → 3.1~4.4x，
+根因是两路分区在低基数数据上「全有或全无」+ 失衡后 DNF 双重全扫）。
+cyclic Lomuto 入死路表；三路直进留作 Gen 52 候选（未做）。
+另：CUTOFF 复扫两家仍分歧（一家 40-48 弱优 ~3%，一家用对照组证明伪信号
+大于真效应、判不可判定）——记录待「每值独立二进制 + 对照组」协议，不行动。
+
+**EVOLUTION SPEED SCORE：~0.95x（热端口径，含上述偏差；cold/warm 行常驻）**
+
 ## 死路记录
 
 **EVOLUTION SPEED SCORE：无代码改动（鲁棒性审计）；矩阵外分布无病态，结论记录在案**
@@ -1302,6 +1361,7 @@ ERROR: Undefined Behavior: attempting a read access ... tag does not exist in th
 | BlockQuicksort 完整实现 | 四次推导未闭合 | 尾段 k 记账/中段跨度问题；Gen 27 第五次实现版：中段重取 pivot bug（门禁抓住）+ 性能先负（random 1M +14%），双标回退，方向关闭（除 T: Copy 特化换原语，文献分析亦无收益）。**Gen 50 注**：外部两家评估用内核分解支持「块化救不了写侧」但把主因归为无条件 swap 的 2R2W 写流量——真实修法疑为 cyclic Lomuto 而非 block 缓冲，列入 Gen 51 候选 |
 | 洞式插入 shift 双取指针（as_ptr + as_mut_ptr 同表达式） | 已修（Gen 50，一行） | 实参从左到右求值，可变 retag 作废共享 tag → Stacked Borrows UB。Miri 三家之二命中 + 本仓库修复前版本红→绿复验（pre_lib.rs:261）。修后 SB+TB 双模型干净。教训：unsafe 写操作一律单指针派生 |
 | 移除 panic=abort 消除基准偏差 | 否决，量化后保留（Gen 49） | 偏差实测 +3.3%@1M / +4.9% 总分利己，但下游性能由用户 profile 决定，两数字各真实；移除断裂 48 代分数序列，量化注记替代 |
+| cyclic Lomuto（写侧一次化） | 死路（Gen 51，两家独立金丝雀） | (a) std 1.96 同类分区逐行移植进本实现：random 1.83→2.09、few_unique 1.91→2.37、sawtooth +43%，全面变慢 5~25%；(b) 朴素 cyclic-hole 形式穷举 4372 例 1092 失败——洞跳走后分区边界失守、静默排错（门禁易漏）。真正修法方向：重复密集直接三路（branchless 循环顺带数等值），列 Gen 52 候选 |
 | Hoare/DNF 加显式哨兵断言（防恶意 Ord 越界） | 否决，文档契约替代（Gen 49） | 安全索引下恶意 cmp 只 panic 不 UB（std 同级），哨兵是每次比较的纯成本；改文档声明全序契约 |
 
 **结论：32 再确认**。有趣的规模交互：48 在大切片上快 4~6.5%（叶子 memmove 相对分区开销更便宜），但在 10k 上慢 36%（叶级 O(CUTOFF²) 开始反超）——几何平均下 32 仍最优。规模自适应 CUTOFF 有 ~2% 的理论空间但复杂度不值，记录观察不实施。
