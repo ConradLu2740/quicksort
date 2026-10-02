@@ -46,7 +46,7 @@
 
 ## 当前状态
 
-- 世代：**Gen 52**（第四家评估裁决：pivot UB 指控经 Miri 实证不成立；非 Copy 分区路径覆盖缺口封堵）
+- 世代：**Gen 53**（hygiene 代：fmt 门禁清零 + panic 契约按证据范围收紧；第四家评估收尾）
 - EVOLUTION SPEED SCORE：**三切面：23-case（n≤10k 热端）~0.95~1.01x / scale-ext（1e5/1e6）0.836x / 冷端 random ~0.5x——对外必须带规模与口径**
 - 正确性：双 profile 全绿——debug 14 套件 / release 14 套件（含 200k mega stress、panic-safety ×2、non-reflexive OOB ×2）；Miri SB+TB 干净；外部 12,648 组逐字节等价 + 42,000 组非自反加固验证
 - 工具链注记：rustc 1.96，std `sort_unstable` 内核 = **ipnsort**（1.81 起替换 pdqsort），bench 标签已更正
@@ -108,6 +108,7 @@
 | Gen 50 | 外部三家评估 | Miri 命中 Stacked Borrows 违规（InsertHole::shift 双取指针，红→绿复验+修复，双模型干净）；few-unique「反超」证伪为单种子假象（9 种子体检 0.901x vs 单种子 1.05x）；CUTOFF 分歧记录不行动；cyclic Lomuto 写侧一次化列入 Gen 51 候选 | 2026-10-01 |
 | Gen 51 | 外部三家复评二轮 | cold/warm 对照实锤热身偏差（冷端 random 1k 0.483x vs 热端 0.950x，23 case 分数系统性乐观约 2 倍，改双口径；第三方轮纠正：std 也有 1.6x 热身，只是 ours 3.4x 更大，且效应仅存于 n≤1e4）；hoare 双扫描加显式边界（非自反 Ord 越界 panic 见证加固，金丝雀零成本，外部 12,648 组逐字节等价+42,000 组加固验证）；cyclic Lomuto 被两家独立金丝雀否决入死路；第三家定位分数分歧根源=规模 n（scale-ext 0.836x@1e5/1e6 vs 1.01x@≤10k）并推翻「比较次数是改进方向」（organ_pipe 少 4% 比较慢 43%，真因是额外内存趟数）→ 三路直进证据升级列首选 | 2026-10-02 |
 | Gen 52 | 第四家评估裁决 | 「branchless pivot ptr::read = UB」指控经 Miri SB 实证**不成立**（ptr::read 不改源内存、净一次 drop；双路径 0 UB）；真实贡献：发现泛型测试自 Gen 30 起非 Copy 类型从未进分区路径（n≤9），已封堵（tests/branchless_drop.rs n=100/1000/10000×3 种子+panic+Miri）；空间注释精确化（栈 O(log n)） | 2026-10-02 |
+| Gen 53 | hygiene（第四家评估收尾） | cargo fmt 全量清零（fmt --check 干净，单独提交）；panic 契约按证据范围收紧（所有权守恒+合法排列为已实测保证、不保证有序、drop panic 与 std 同级，分层表述） | 2026-10-02 |
 
 > **读表须知（Gen 46 补注）**：上表分数是「当次运行的 gauge 同档」下的快照。Gen 26 前后（gauge ~8.80 冷档）读数 ~1.02~1.03，Gen 42 之后机器基线漂移（gauge ~8.86 仍叫「冷」但实际更 warm，见 Gen 44），同代码读数降至 ~0.96~0.97。**这不是性能回退**（Gen 44 同 session A/B 已证），跨代比较必须对 gauge 且尽量同 session；判代码优劣的金标准是「我们自己的绝对耗时」的同 session 对比。
 >
@@ -1429,6 +1430,37 @@ unsafe 的一家）判其安全与此一致。
   heapsort 兜底常数差）均与此前记录一致，无新动作。
 
 **EVOLUTION SPEED SCORE：无代码改动（裁决代 + 测试/文档）；非 Copy 分区路径首次获得覆盖**
+
+## Gen 53：hygiene 代（fmt 门禁清零 + panic 契约收紧，第四家评估收尾两条）
+
+**背景**：第四家评估收尾认可 Gen 52 处置，留两项 hygiene：(1) `cargo fmt
+--check` 自 Gen 49 起存在漂移未清；(2) 公共 API 的 panic 契约把已验证
+范围写宽了——原措辞「数组仍恢复为合法排列」易被读成所有分区路径都有
+同等级别的排列恢复保证。
+
+### 53.1 fmt 门禁清零（commit 38b0a4e）
+
+`cargo fmt` 全量：src/bin/bench.rs、src/inputs.rs、src/lib.rs + 6 个测试
+文件。纯代码重排（rustfmt 不碰注释），双 profile 门禁 + clippy 复验绿后
+单独提交（按评估方建议的粒度）。此后 fmt --check 干净，可作为门禁项。
+
+### 53.2 panic 契约按证据范围收紧（lib.rs 公共 doc）
+
+改写为分层表述，每条都对应实测证据（tests/panic_safety.rs 插入双路径、
+tests/branchless_drop.rs 分区双路径）：
+
+- **已实测保证**：cmp panic 时排序中止；元素所有权守恒（每元素恰好
+  drop 一次，无 double-free/泄漏）；panic 后数组是输入多重集的合法排列
+  （分区路径只做 swap 天然保持；插入路径由 InsertHole guard 回填恢复）；
+- **明确不保证**：panic 后数组「有序」或「部分有序」；
+- **未实测边界**（如 `T::drop` 自身 panic）与 std 同级。
+
+原理由也写进注释：分区路径全程只做 swap、不把值搬出数组，所以守恒是
+结构性的；只有洞式插入需要 guard。这同时回答了评估方问的「Hoare/DNF/
+heapsort 中途 panic 分别保证什么」——与插入路径同为守恒+合法排列，
+验证强度不同（插入路径是唯一需要恢复机制的路径）。
+
+**EVOLUTION SPEED SCORE：无算法改动（hygiene 代）；fmt/clippy/双 profile 三门禁全绿**
 
 ## 死路记录
 

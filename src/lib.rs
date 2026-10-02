@@ -226,8 +226,17 @@ const UNBALANCED_DIV: usize = 8;
 ///   （公开 API，n >= CUTOFF+1，安全索引边界检查非 UB）；Gen 51 已给
 ///   双扫描加显式边界：合法 Ord 下哨兵先触发、零行为变化，非自反输入
 ///   下不再 panic/挂起，多重集守恒（tests/non_reflexive_oob.rs）。
-/// - 若 `cmp` panic：以 drop guard 保证数组仍恢复为合法排列（panic
-///   后每元素恰好存活一次，可安全 drop）；不再继续排序。
+/// - 若 `cmp` panic：排序不再继续。已实测的所有路径上保证
+///   （tests/panic_safety.rs、tests/branchless_drop.rs）：
+///   - 元素所有权守恒：每个元素恰好 drop 一次，无 double-free、无泄漏。
+///     洞式插入被 read 出的值由 InsertHole guard 在 unwind 时回填洞位；
+///     分区路径（Hoare / branchless Lomuto / DNF / heapsort / 粉碎）
+///     全程只做 swap、不把值搬出数组，天然守恒。
+///   - panic 后数组是输入多重集的合法排列（分区路径的 swap 天然保持；
+///     插入路径由 guard 回填恢复——由「每唯一 id 恰好 drop 一次」证）。
+///   - **不保证** panic 后数组「有序」或「部分有序」。
+///
+///   未实测的边界（如 `T::drop` 自身 panic）与 std 同级。
 pub fn quicksort<T: Ord>(arr: &mut [T]) {
     if arr.len() > 1 {
         // 深度预算：3*log2(n)。正常输入 balanced 分割只用 log2(n)，永远碰不到；
