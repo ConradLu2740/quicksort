@@ -659,9 +659,10 @@ fn scramble_patterns<T>(arr: &mut [T]) {
 
 /// 坏分区（任一侧 < len/8）时对两侧分别调用模式粉碎。
 /// 注意：必须分别作用于左/右两个子切片 —— 对整段调用会打乱分区边界！
-/// 右阈 `>= 9` 的来历：右切片是 `arr[gt+1..]`，长度 = len-gt-1；
-/// `break_patterns` 内部 len < 8 no-op，所以守卫应为「切片长度 >= 8」
-/// 即 `len - gt >= 9`（Gen 49 把右阈改成 `>= 8` 时仍差 1，Gen 51 修正）。
+/// 右阈 `>= 9`（Gen 51）：右切片 `arr[gt+1..]` 长度 = len-gt-1，与守卫
+/// 值 `len-gt` 差 1，取 `>= 9` 是守卫与语义的精确对齐（slice len >= 8）。
+/// 旧的 `>= 8` **本就行为正确**（切片长 7 时 break_patterns 内部 no-op），
+/// 仅为多调用一次必然 no-op 的函数——是精度对齐，不是修 bug。
 fn break_patterns_sides<T>(arr: &mut [T], lt: usize, gt: usize) {
     if lt >= 8 {
         break_patterns(&mut arr[..lt]);

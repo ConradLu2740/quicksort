@@ -225,11 +225,43 @@ fn run() {
                 let (ours_warm, _) = batch_time(&data, 5, true);
                 let (std_warm, _) = batch_time(&data, 5, false);
                 println!(
-                    "info cold/warm n={n:>6} {name:<14}: cold ratio={:.3}x (ours {:.4?}ms) | warm ratio={:.3}x (ours {:.4?}ms)",
-                    std_cold / ours_cold, ours_cold, std_warm / ours_warm, ours_warm
+                    "info cold/warm n={n:>6} {name:<14}: cold ratio={:.3}x (ours {:.4?}ms) | warm ratio={:.3}x (ours {:.4?}ms) | std cold {:.4?}ms warm {:.4?}ms",
+                    std_cold / ours_cold, ours_cold, std_warm / ours_warm, ours_warm, std_cold, std_warm
                 );
             }
         }
+    }
+
+    // 规模扩展体检（Gen 51，复验外部评估的规模预言）：
+    // 外部第三轮用 11 分布 × 4 规模分离测量断言：两轮分数分歧的根源是**规模
+    // 区间**不是分布集——n=1k/10k 几何平均 ~1.18（≈打平），n=1e5/1e6 → 1.28~1.32
+    // （慢三成）；我们的 23 表全是 n<=10k，所以读到 ~0.95；"缺的是规模不是分布"。
+    // 这里把 7 个矩阵分布的规模补到 1e5/1e6，验证该预言（不计入 23 case 分数，
+    // 保持跨代序列可比；iters 复用矩阵定义）。
+    {
+        let mut log_sum = 0.0f64;
+        let mut cases = 0usize;
+        for dist in DISTS {
+            for &n in &[100_000usize, 1_000_000] {
+                let data = dist.make(n);
+                let k = dist.iters(n);
+                let (ours_ms, ok1) = batch_time(&data, k, true);
+                let (std_ms, _) = batch_time(&data, k, false);
+                all_ok &= ok1;
+                let ratio = std_ms / ours_ms;
+                log_sum += ratio.ln();
+                cases += 1;
+                println!(
+                    "info scale-ext {:<14} n={:>8} ours={ours_ms:>10.4} std={std_ms:>10.4} speedup={ratio:.3}x",
+                    dist.name(),
+                    n
+                );
+            }
+        }
+        let geo = (log_sum / cases as f64).exp();
+        println!(
+            "info scale-ext geomean (7 dists x 1e5/1e6, {cases} cases): {geo:.3}x —— 外部预言 ~0.76x（1.32x 慢）；23-case 分数（n<=10k）不受此行影响"
+        );
     }
 
     if !all_ok {
