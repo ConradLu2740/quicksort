@@ -46,7 +46,7 @@
 
 ## 当前状态
 
-- 世代：**Gen 51**（外部三家复评第二轮 → 热身偏差实锤 + hoare 加固；第三家复评确认加固零行为变化并定位分数分歧根源=规模）
+- 世代：**Gen 52**（第四家评估裁决：pivot UB 指控经 Miri 实证不成立；非 Copy 分区路径覆盖缺口封堵）
 - EVOLUTION SPEED SCORE：**三切面：23-case（n≤10k 热端）~0.95~1.01x / scale-ext（1e5/1e6）0.836x / 冷端 random ~0.5x——对外必须带规模与口径**
 - 正确性：双 profile 全绿——debug 14 套件 / release 14 套件（含 200k mega stress、panic-safety ×2、non-reflexive OOB ×2）；Miri SB+TB 干净；外部 12,648 组逐字节等价 + 42,000 组非自反加固验证
 - 工具链注记：rustc 1.96，std `sort_unstable` 内核 = **ipnsort**（1.81 起替换 pdqsort），bench 标签已更正
@@ -106,7 +106,8 @@
 | Gen 48 | 饱和判定 | 可识别优化空间穷尽（算法/参数/鲁棒/测量/文档五域全闭合），按「无有用下一动作」条款完成；修正 Gen 45 机制解释 | 2026-10-01 |
 | Gen 49 | 测评修复代 | 第三方测评发现 S1（panic 路径 double-drop，对 Drop 类型是 UB）→ InsertHole guard 修复，panic-safety 测试红→绿；M2 量化 panic=abort 偏差（+3.3%@1M/+4.9% 总分）保留并注明；clippy 1.96 新 lint 清零；bench 标签 pdqsort→ipnsort | 2026-10-01 |
 | Gen 50 | 外部三家评估 | Miri 命中 Stacked Borrows 违规（InsertHole::shift 双取指针，红→绿复验+修复，双模型干净）；few-unique「反超」证伪为单种子假象（9 种子体检 0.901x vs 单种子 1.05x）；CUTOFF 分歧记录不行动；cyclic Lomuto 写侧一次化列入 Gen 51 候选 | 2026-10-01 |
-| Gen 51 | 外部三家复评二轮 | cold/warm 对照实锤热身偏差（冷端 random 1k 0.483x vs 热端 0.950x，23 case 分数系统性乐观约 2 倍，改双口径；第三方轮纠正：std 也有 1.6x 热身，只是 ours 3.4x 更大，且效应仅存于 n≤1e4）；hoare 双扫描加显式边界（非自反 Ord 越界 panic 见证加固，金丝雀零成本，外部 12,648 组逐字节等价+42,000 组加固验证）；cyclic Lomuto 被两家独立金丝雀否决入死路；第三家定位分数分歧根源=规模 n（scale-ext 0.836x@1e5/1e6 vs 1.01x@≤10k）并推翻「比较次数是改进方向」（organ_pipe 少 4% 比较慢 43%，真因是额外内存趟数）→ 三路直进证据升级列 Gen 52 首选 | 2026-10-02 |
+| Gen 51 | 外部三家复评二轮 | cold/warm 对照实锤热身偏差（冷端 random 1k 0.483x vs 热端 0.950x，23 case 分数系统性乐观约 2 倍，改双口径；第三方轮纠正：std 也有 1.6x 热身，只是 ours 3.4x 更大，且效应仅存于 n≤1e4）；hoare 双扫描加显式边界（非自反 Ord 越界 panic 见证加固，金丝雀零成本，外部 12,648 组逐字节等价+42,000 组加固验证）；cyclic Lomuto 被两家独立金丝雀否决入死路；第三家定位分数分歧根源=规模 n（scale-ext 0.836x@1e5/1e6 vs 1.01x@≤10k）并推翻「比较次数是改进方向」（organ_pipe 少 4% 比较慢 43%，真因是额外内存趟数）→ 三路直进证据升级列首选 | 2026-10-02 |
+| Gen 52 | 第四家评估裁决 | 「branchless pivot ptr::read = UB」指控经 Miri SB 实证**不成立**（ptr::read 不改源内存、净一次 drop；双路径 0 UB）；真实贡献：发现泛型测试自 Gen 30 起非 Copy 类型从未进分区路径（n≤9），已封堵（tests/branchless_drop.rs n=100/1000/10000×3 种子+panic+Miri）；空间注释精确化（栈 O(log n)） | 2026-10-02 |
 
 > **读表须知（Gen 46 补注）**：上表分数是「当次运行的 gauge 同档」下的快照。Gen 26 前后（gauge ~8.80 冷档）读数 ~1.02~1.03，Gen 42 之后机器基线漂移（gauge ~8.86 仍叫「冷」但实际更 warm，见 Gen 44），同代码读数降至 ~0.96~0.97。**这不是性能回退**（Gen 44 同 session A/B 已证），跨代比较必须对 gauge 且尽量同 session；判代码优劣的金标准是「我们自己的绝对耗时」的同 session 对比。
 >
@@ -1380,6 +1381,54 @@ cyclic Lomuto 入死路表；三路直进留作 Gen 52 候选（未做）。
 大于真效应、判不可判定）——记录待「每值独立二进制 + 对照组」协议，不行动。
 
 **EVOLUTION SPEED SCORE：三切面并存——23-case（n≤10k，热端口径）~0.95~1.01x / scale-ext（7 分布 × 1e5/1e6）0.836x / 冷端（每轮新数据）random ~0.5x。对外总分必须绑定规模区间与口径（Gen 51 第三家定论：两轮分歧 100% 源于 n）**
+
+## Gen 52：第四家评估的 pivot UB 指控裁决（Miri 实证：不成立）+ 覆盖缺口封堵
+
+**背景**：第四家评估做最终源码审查，指控 `branchless_partition` 的
+`ptr::read(arr[mid])` 「把 mid 搬空后循环仍读该槽 = 未初始化内存读取 UB，
+对非 Copy 类型高危」，列为「修复前不建议生产」。该评估方未能运行 Miri
+（stable 工具链无组件），纯静态审查。
+
+### 52.1 裁决：指控不成立（Miri SB + drop 计数双实证）
+
+机理：`ptr::read` 是纯按位拷贝，**不使源内存失效**——`arr[mid]` 的比特
+始终原位有效，循环里 `*base.add(mid) < *pivot` 等于 pivot 与自身比较，
+读的是有效数据，不存在「空槽」。所有权账：该值只以两种形态存在——pivot
+本地副本（`ManuallyDrop`，**永不 drop**，drop 了才是双重释放）与一个数组
+槽位（随 slice 恰好 drop 一次）——净一次 drop。前三家（含逐点审计 6 处
+unsafe 的一家）判其安全与此一致。
+
+实证（本仓库 nightly+Miri，指控方没有的条件）：
+- 新增 tests/branchless_drop.rs：非 Copy + String 堆载荷 + 全局 drop 计数，
+  n=100/1000/10000 × 3 种子（random 走粗糙预筛直达 Lomuto）：排序正确
+  （对拍 std）、多重集守恒、**每元素恰好 drop 一次**；panic 注入路径同样。
+- Miri Stacked Borrows：`miri_sized_small_non_copy_drop`（n=100/200）与
+  panic 路径版均 **0 UB**。若真为未初始化读取或 double-drop，Miri 当场报。
+- 附带纠错：第一版测试我自己写错（drop 日志记 key 而非唯一 id，key 域
+  0..999 天然重复 → 假阳性「id 694: 2 drops」），已改记唯一 id——
+  与 Gen 49 的教训同构：**测试自身的前提要先证**。
+
+### 52.2 外部这条报告的真实贡献（照单全收）
+
+1. **覆盖缺口属实且严重**：`generic_type_paths`（Gen 30 起）只有 n=5 的
+   String / n=9 的 i64，全部 ≤ CUTOFF，**非 Copy 类型从未进入任何分区
+   路径**——连同 panicked 早期几轮的全部泛型测试都在这条盲区里。已由
+   branchless_drop.rs 封堵（n=100/1000/10000 × 3 种子 + panic 路径 +
+   Miri 小规模），这是本代真正的产出。
+2. 文档「空间 O(1)」不严谨：改为「数据空间 O(1)，调用栈 O(log n）」。
+3. 对本实现的定性评价（自适应 introsort 变体、路由分类器设计、递归控制、
+   性能三切面 23-case~1.0 / scale-ext 0.84 / 冷端~0.5 / nearly-sorted
+   1.33x / two-run 0.49x 弱项）与 EVOLUTION 记录一致，无新信息。
+
+### 52.3 死路表补记：外部误判的类型学
+
+「move-out ≠ uninitialized」：把所有权模型的「逻辑移出」当成「内存失效」
+是静态审查高频误判——ptr::read 后源槽位仍持有效比特，这类「双份持有 +
+  永不 drop 一份」的惯法（std 排序实现同款）只能靠 Miri/drop 计数裁决，
+  读代码判不了。第四家其余结论（few-unique 种子彩票、CUTOFF 未定、
+  heapsort 兜底常数差）均与此前记录一致，无新动作。
+
+**EVOLUTION SPEED SCORE：无代码改动（裁决代 + 测试/文档）；非 Copy 分区路径首次获得覆盖**
 
 ## 死路记录
 
