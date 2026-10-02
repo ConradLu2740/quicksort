@@ -2,6 +2,10 @@
 name = "sort"
 version = "0.1.0"
 edition = "2024"
+description = "「快排进化论」：自适应 introsort 式泛型快排（原地/零分配），53 代演化日志与四家外部评估史"
+license = "MIT"
+repository = "https://github.com/ConradLu2740/quicksort"
+readme = "README.md"
 
 [dependencies]
 

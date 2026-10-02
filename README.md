@@ -70,4 +70,4 @@ share/               # 外发评估包：自包含单文件源码 + 委托文档
 - **Gen 54 候选**：重复密集数据直接进三路分区（branchless 循环顺带统计
   等值数，pdqsort/ipnsort 同款），同时瞄准上述两个弱项
 
-License：尚未选定（推送时未附 LICENSE，GitHub 按 "None" 处理）。
+License：MIT（见 [LICENSE](LICENSE)）。
